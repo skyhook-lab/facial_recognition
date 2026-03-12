@@ -154,25 +154,26 @@ class DetectionViewState extends State<DetectionView>
 
               //detect faces from the camera frame
               detectedFaces = await faceDetectorService.doFaceDetection(
-                  faceDetectorSource: FaceDetectorSource.cameraFrame,
-                  cameraFrame: image);
+                faceDetectorSource: FaceDetectorSource.cameraFrame,
+                cameraFrame: image,
+              );
 
-              if (!recognitionService.isRecognized) {
-                //perform face recognition on detected faces
-                if (recognitionService.performFaceRecognition(
-                  recognitions: recognitions,
-                  cameraImageFrame: image,
-                  faces: detectedFaces,
-                )) {
-                  if (mounted) {
-                    // Navigator.of(context).pop(recognitions);
-                    widget.onRecognizedUsersChanged?.call(recognitions);
-                  }
-                } else {
-                  isBusy = false;
-                  setState(() {});
+              //if (!recognitionService.isRecognized) {
+              //perform face recognition on detected faces
+              if (recognitionService.performFaceRecognition(
+                recognitions: recognitions,
+                cameraImageFrame: image,
+                faces: detectedFaces,
+              )) {
+                if (mounted) {
+                  // Navigator.of(context).pop(recognitions);
+                  widget.onRecognizedUsersChanged?.call(recognitions);
                 }
+              } else {
+                isBusy = false;
+                setState(() {});
               }
+              // }
             }
           }
         },
