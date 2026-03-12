@@ -56,7 +56,7 @@ class DetectionView extends StatefulWidget {
     this.enabled = true,
     this.resolutionPreset = ResolutionPreset.high,
     this.frameSkipCount = 10,
-    this.threshold = 0.8,
+    this.threshold = 0.9,
     this.faceDetectorPerformanceMode = FaceDetectorMode.accurate,
     this.faceOverlayShapeType = FaceOverlayShapeType.rectangle,
     this.customFaceOverlayShape,
@@ -152,26 +152,51 @@ class DetectionViewState extends State<DetectionView>
               isBusy = true;
               setState(() {});
 
-              //detect faces from the camera frame
+              // Timing instrumentation: measure durations for each step so we can
+              // track performance. We measure detection time, recognition time,
+              // callback time (if any), and the total time for processing this frame.
+              // These timings are logged only in debug mode.
+              final totalStopwatch = Stopwatch()..start();
+
+              // Detect faces from the camera frame
+              final detectionStopwatch = Stopwatch()..start();
               detectedFaces = await faceDetectorService.doFaceDetection(
                 faceDetectorSource: FaceDetectorSource.cameraFrame,
                 cameraFrame: image,
               );
+              detectionStopwatch.stop();
 
-              //if (!recognitionService.isRecognized) {
-              //perform face recognition on detected faces
-              if (recognitionService.performFaceRecognition(
+              // Perform face recognition on detected faces and measure its duration
+              final recognitionStopwatch = Stopwatch()..start();
+              final recognized = recognitionService.performFaceRecognition(
                 recognitions: recognitions,
                 cameraImageFrame: image,
                 faces: detectedFaces,
-              )) {
+              );
+              recognitionStopwatch.stop();
+
+              // If recognized, call the callback and measure callback duration
+              int callbackMs = 0;
+              if (recognized) {
                 if (mounted) {
+                  final callbackStopwatch = Stopwatch()..start();
                   // Navigator.of(context).pop(recognitions);
                   widget.onRecognizedUsersChanged?.call(recognitions);
+                  callbackStopwatch.stop();
+                  callbackMs = callbackStopwatch.elapsedMilliseconds;
                 }
               } else {
+                // If not recognized, reset busy state so subsequent frames can be processed
                 isBusy = false;
                 setState(() {});
+              }
+
+              totalStopwatch.stop();
+
+              // Log timings in debug mode to help profiling and performance tuning
+              if (kDebugMode) {
+                debugPrint(
+                    'Face processing durations (ms): detection=${detectionStopwatch.elapsedMilliseconds}, recognition=${recognitionStopwatch.elapsedMilliseconds}, callback=${callbackMs}, total=${totalStopwatch.elapsedMilliseconds}');
               }
               // }
             }
