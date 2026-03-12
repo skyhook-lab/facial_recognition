@@ -94,7 +94,7 @@ class RecognitionService {
           face: face);
 
       log('recognized user: ${recognizedUser?.name}, distance: ${recognizedUser?.distance} < $threshold');
-      if (recognizedUser!.distance < threshold &&
+      if (recognizedUser!.distance <= threshold &&
           recognizedUser!.distance >= 0) {
         recognitions.add(recognizedUser!);
         log('Face Recognized !');

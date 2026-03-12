@@ -1,13 +1,11 @@
 import 'dart:io';
 
 import 'package:camera/camera.dart';
-import 'package:facial_recognition/src/data/models/register_user_input_model.dart';
-
 import 'package:facial_recognition/src/data/models/recognition_model.dart';
+import 'package:facial_recognition/src/data/models/register_user_input_model.dart';
 import 'package:facial_recognition/src/data/models/user_model.dart';
 import 'package:facial_recognition/src/services/face_detector_service.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-
 import 'package:image/image.dart' as img;
 
 /// [registerUsers] function is responsible for registering the users by performing face detection and
@@ -33,6 +31,10 @@ Future<List<UserModel>> registerUsers(
       faceDetectorSource: FaceDetectorSource.localImage,
       localImage: File(registerUserInputs[i].imagePath),
     );
+
+    if (faces.isEmpty) {
+      continue;
+    }
 
     UserModel user = UserModel(
       id: i,
