@@ -196,7 +196,7 @@ class DetectionViewState extends State<DetectionView>
               // Log timings in debug mode to help profiling and performance tuning
               if (kDebugMode) {
                 debugPrint(
-                    'Face processing durations (ms): detection=${detectionStopwatch.elapsedMilliseconds}, recognition=${recognitionStopwatch.elapsedMilliseconds}, callback=${callbackMs}, total=${totalStopwatch.elapsedMilliseconds}');
+                    'Face processing durations (ms): detection=${detectionStopwatch.elapsedMilliseconds}, recognition=${recognitionStopwatch.elapsedMilliseconds}, callback=$callbackMs, total=${totalStopwatch.elapsedMilliseconds}');
               }
               // }
             }
