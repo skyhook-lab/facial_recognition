@@ -56,7 +56,7 @@ class DetectionView extends StatefulWidget {
     this.enabled = true,
     this.resolutionPreset = ResolutionPreset.high,
     this.frameSkipCount = 10,
-    this.threshold = 0.8,
+    this.threshold = 0.9,
     this.faceDetectorPerformanceMode = FaceDetectorMode.accurate,
     this.faceOverlayShapeType = FaceOverlayShapeType.rectangle,
     this.customFaceOverlayShape,
