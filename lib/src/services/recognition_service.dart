@@ -29,8 +29,9 @@ img.Image _preprocessCameraImage(_PreprocessParams p) {
       height: p.height,
       bytes: p.bytes.buffer,
       rowStride: p.bytesPerRow,
-      bytesOffset: 28,
+      bytesOffset: p.bytes.offsetInBytes,
       order: img.ChannelOrder.bgra,
+      numChannels: 4,
     );
   } else {
     final outImg = img.Image(height: p.height, width: p.width);
@@ -127,11 +128,11 @@ class RecognitionService {
   }) async {
     recognitions.clear();
     img.Image? image;
+    final angle = Platform.isIOS ? sensorOrientation : rotationCompensation;
     if (cameraImageFrame != null) {
       if (Platform.isAndroid) {
         rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
       }
-      final angle = Platform.isIOS ? sensorOrientation : rotationCompensation;
       // Run image preprocessing in a background thread (doesn't block UI).
       // image = await compute(
       //   _preprocessCameraImage,
@@ -163,7 +164,7 @@ class RecognitionService {
     for (Face face in faces) {
       Rect faceRect = face.boundingBox;
       //crop face
-      croppedFace = _cropFaces(image: image!, faceRect: faceRect);
+      croppedFace = _cropFaces(image: image!, angle: angle, faceRect: faceRect);
 
       //pass cropped face to face recognition model
       recognizedUser = recognitionModel.recognize(
@@ -184,73 +185,79 @@ class RecognitionService {
     return isRecognized;
   }
 
-  img.Image _cropFaces({required img.Image image, required Rect faceRect}) {
-    return img.copyCrop(image,
-        x: faceRect.left.toInt(),
-        y: faceRect.top.toInt(),
-        width: faceRect.width.toInt(),
-        height: faceRect.height.toInt());
+  img.Image _cropFaces({
+    required img.Image image,
+    required int angle,
+    required Rect faceRect,
+  }) {
+    int x = faceRect.left.round();
+    int y = faceRect.top.round();
+    int w = faceRect.width.round();
+    int h = faceRect.height.round();
+
+    int cropX, cropY, cropW, cropH;
+
+    switch (angle % 360) {
+      case 0:
+        cropX = x;
+        cropY = y;
+        cropW = w;
+        cropH = h;
+        break;
+
+      case 90:
+        cropX = image.width - (y + h);
+        cropY = x;
+        cropW = h;
+        cropH = w;
+        break;
+
+      case 180:
+        cropX = image.width - (x + w);
+        cropY = image.height - (y + h);
+        cropW = w;
+        cropH = h;
+        break;
+
+      case 270:
+        cropX = y;
+        cropY = image.height - (x + w);
+        cropW = h;
+        cropH = w;
+        break;
+
+      default:
+        throw ArgumentError('Angle must be 0, 90, 180, or 270');
+    }
+
+    cropX = cropX.clamp(0, image.width - 1);
+    cropY = cropY.clamp(0, image.height - 1);
+    cropW = cropW.clamp(1, image.width - cropX);
+    cropH = cropH.clamp(1, image.height - cropY);
+
+    var cropped = img.copyCrop(
+      image,
+      x: cropX,
+      y: cropY,
+      width: cropW,
+      height: cropH,
+    );
+
+    // Rotate the cropped face back upright for the recognition model.
+    switch (angle % 360) {
+      case 90:
+        cropped = img.copyRotate(cropped, angle: 270);
+        break;
+      case 180:
+        cropped = img.copyRotate(cropped, angle: 180);
+        break;
+      case 270:
+        cropped = img.copyRotate(cropped, angle: 90);
+        break;
+    }
+
+    return cropped;
   }
-
-  // img.Image _convertBGRA8888ToImage(CameraImage cameraImage) {
-  //   final plane = cameraImage.planes[0];
-  //   var iosBytesOffset = 28;
-  //   return img.Image.fromBytes(
-  //     width: cameraImage.width,
-  //     height: cameraImage.height,
-  //     bytes: plane.bytes.buffer,
-  //     rowStride: plane.bytesPerRow,
-  //     bytesOffset: iosBytesOffset,
-  //     order: img.ChannelOrder.bgra,
-  //   );
-  // }
-
-  // img.Image _convertNV21(CameraImage image) {
-  //   final width = image.width.toInt();
-  //   final height = image.height.toInt();
-
-  //   Uint8List yuv420sp = image.planes[0].bytes;
-
-  //   final outImg = img.Image(height: height, width: width);
-  //   final int frameSize = width * height;
-
-  //   for (int j = 0, yp = 0; j < height; j++) {
-  //     int uvp = frameSize + (j >> 1) * width, u = 0, v = 0;
-  //     for (int i = 0; i < width; i++, yp++) {
-  //       int y = (0xff & yuv420sp[yp]) - 16;
-  //       if (y < 0) y = 0;
-  //       if ((i & 1) == 0) {
-  //         v = (0xff & yuv420sp[uvp++]) - 128;
-  //         u = (0xff & yuv420sp[uvp++]) - 128;
-  //       }
-  //       int y1192 = 1192 * y;
-  //       int r = (y1192 + 1634 * v);
-  //       int g = (y1192 - 833 * v - 400 * u);
-  //       int b = (y1192 + 2066 * u);
-
-  //       if (r < 0) {
-  //         r = 0;
-  //       } else if (r > 262143) {
-  //         r = 262143;
-  //       }
-
-  //       if (g < 0) {
-  //         g = 0;
-  //       } else if (g > 262143) {
-  //         g = 262143;
-  //       }
-  //       if (b < 0) {
-  //         b = 0;
-  //       } else if (b > 262143) {
-  //         b = 262143;
-  //       }
-
-  //       outImg.setPixelRgb(i, j, ((r << 6) & 0xff0000) >> 16,
-  //           ((g >> 2) & 0xff00) >> 8, (b >> 10) & 0xff);
-  //     }
-  //   }
-  //   return outImg;
-  // }
 
   void dispose() {
     recognitionModel.close();

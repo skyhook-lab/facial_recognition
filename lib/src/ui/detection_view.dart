@@ -146,9 +146,13 @@ class DetectionViewState extends State<DetectionView>
           if (!widget.enabled || !mounted) {
             return;
           }
-          if (!isBusy) {
-            isBusy = true;
-            _analyzeFrame(image);
+
+          frameCount++;
+          if (frameCount % widget.frameSkipCount == 0) {
+            if (!isBusy) {
+              isBusy = true;
+              _analyzeFrame(image);
+            }
           }
         },
       );
