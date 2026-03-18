@@ -143,38 +143,12 @@ class DetectionViewState extends State<DetectionView>
 
       cameraController!.startImageStream(
         (image) async {
-          if (!widget.enabled) {
+          if (!widget.enabled || !mounted) {
             return;
           }
-          frameCount++;
-          if (frameCount % widget.frameSkipCount == 0) {
-            if (!isBusy) {
-              isBusy = true;
-              setState(() {});
-
-              //detect faces from the camera frame
-              detectedFaces = await faceDetectorService.doFaceDetection(
-                faceDetectorSource: FaceDetectorSource.cameraFrame,
-                cameraFrame: image,
-              );
-
-              //if (!recognitionService.isRecognized) {
-              //perform face recognition on detected faces
-              if (recognitionService.performFaceRecognition(
-                recognitions: recognitions,
-                cameraImageFrame: image,
-                faces: detectedFaces,
-              )) {
-                if (mounted) {
-                  // Navigator.of(context).pop(recognitions);
-                  widget.onRecognizedUsersChanged?.call(recognitions);
-                }
-              } else {
-                isBusy = false;
-                setState(() {});
-              }
-              // }
-            }
+          if (!isBusy) {
+            isBusy = true;
+            _analyzeFrame(image);
           }
         },
       );
@@ -183,6 +157,36 @@ class DetectionViewState extends State<DetectionView>
         setState(() {});
       }
     });
+  }
+
+  Future<void> _analyzeFrame(CameraImage image) async {
+    setState(() {});
+
+    //detect faces from the camera frame
+    detectedFaces = await faceDetectorService.doFaceDetection(
+      faceDetectorSource: FaceDetectorSource.cameraFrame,
+      cameraFrame: image,
+    );
+    if (!mounted || !widget.enabled) {
+      return;
+    }
+
+    //perform face recognition on detected faces
+    try {
+      bool success = await recognitionService.performFaceRecognition(
+        recognitions: recognitions,
+        cameraImageFrame: image,
+        faces: detectedFaces,
+      );
+
+      if (success) {
+        widget.onRecognizedUsersChanged?.call(recognitions);
+      }
+    } catch (e, s) {
+      debugPrint('Error during face recognition: $e\n$s');
+    }
+    isBusy = false;
+    setState(() {});
   }
 
   @override

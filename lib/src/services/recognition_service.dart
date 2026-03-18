@@ -1,12 +1,77 @@
+import 'dart:async';
 import 'dart:developer';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:facial_recognition/src/data/models/recognition_model.dart';
 import 'package:facial_recognition/src/data/models/user_model.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
+
+typedef _PreprocessParams = ({
+  Uint8List bytes,
+  int width,
+  int height,
+  int bytesPerRow,
+  int angle,
+  bool isIOS,
+});
+
+/// Preprocesses camera frame (converts pixel format and rotates).
+/// Top-level function so it can run via [compute].
+img.Image _preprocessCameraImage(_PreprocessParams p) {
+  img.Image image;
+  if (p.isIOS) {
+    image = img.Image.fromBytes(
+      width: p.width,
+      height: p.height,
+      bytes: p.bytes.buffer,
+      rowStride: p.bytesPerRow,
+      bytesOffset: 28,
+      order: img.ChannelOrder.bgra,
+    );
+  } else {
+    final outImg = img.Image(height: p.height, width: p.width);
+    final int frameSize = p.width * p.height;
+    final yuv420sp = p.bytes;
+    for (int j = 0, yp = 0; j < p.height; j++) {
+      int uvp = frameSize + (j >> 1) * p.width, u = 0, v = 0;
+      for (int i = 0; i < p.width; i++, yp++) {
+        int y = (0xff & yuv420sp[yp]) - 16;
+        if (y < 0) y = 0;
+        if ((i & 1) == 0) {
+          v = (0xff & yuv420sp[uvp++]) - 128;
+          u = (0xff & yuv420sp[uvp++]) - 128;
+        }
+        int y1192 = 1192 * y;
+        int r = y1192 + 1634 * v;
+        int g = y1192 - 833 * v - 400 * u;
+        int b = y1192 + 2066 * u;
+        if (r < 0) {
+          r = 0;
+        } else if (r > 262143) {
+          r = 262143;
+        }
+        if (g < 0) {
+          g = 0;
+        } else if (g > 262143) {
+          g = 262143;
+        }
+        if (b < 0) {
+          b = 0;
+        } else if (b > 262143) {
+          b = 262143;
+        }
+        outImg.setPixelRgb(i, j, ((r << 6) & 0xff0000) >> 16,
+            ((g >> 2) & 0xff00) >> 8, (b >> 10) & 0xff);
+      }
+    }
+    image = outImg;
+  }
+  return img.copyRotate(image, angle: p.angle);
+}
 
 /// [RecognitionService] class is responsible for performing face recognition on the detected faces.
 class RecognitionService {
@@ -54,27 +119,41 @@ class RecognitionService {
   ///   - faces: A list of detected [Face] objects.
   ///   - recognitions: A set of [UserModel] objects to be updated with recognized users.
   /// - Returns: A boolean value indicating whether any faces were recognized.
-  bool performFaceRecognition({
+  Future<bool> performFaceRecognition({
     CameraImage? cameraImageFrame,
     img.Image? localImageFrame,
     required List<Face> faces,
     required Set<UserModel> recognitions,
-  }) {
+  }) async {
     recognitions.clear();
     img.Image? image;
     if (cameraImageFrame != null) {
-      //convert CameraImage to Image and rotate it so that our frame will be in a portrait
-      image = Platform.isIOS
-          ? _convertBGRA8888ToImage(cameraImageFrame) as img.Image?
-          : _convertNV21(cameraImageFrame);
-
-      if (Platform.isIOS) {
-        image = img.copyRotate(image!, angle: sensorOrientation);
-      } else if (Platform.isAndroid) {
+      if (Platform.isAndroid) {
         rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
-
-        image = img.copyRotate(image!, angle: rotationCompensation);
       }
+      final angle = Platform.isIOS ? sensorOrientation : rotationCompensation;
+      // Run image preprocessing in a background thread (doesn't block UI).
+      // image = await compute(
+      //   _preprocessCameraImage,
+      //   (
+      //     bytes: cameraImageFrame.planes[0].bytes,
+      //     width: cameraImageFrame.width,
+      //     height: cameraImageFrame.height,
+      //     bytesPerRow: cameraImageFrame.planes[0].bytesPerRow,
+      //     angle: angle,
+      //     isIOS: Platform.isIOS,
+      //   ),
+      // );
+      image = _preprocessCameraImage(
+        (
+          bytes: cameraImageFrame.planes[0].bytes,
+          width: cameraImageFrame.width,
+          height: cameraImageFrame.height,
+          bytesPerRow: cameraImageFrame.planes[0].bytesPerRow,
+          angle: angle,
+          isIOS: Platform.isIOS,
+        ),
+      );
     } else if (localImageFrame != null) {
       image = localImageFrame;
     }
@@ -113,65 +192,65 @@ class RecognitionService {
         height: faceRect.height.toInt());
   }
 
-  img.Image _convertBGRA8888ToImage(CameraImage cameraImage) {
-    final plane = cameraImage.planes[0];
-    var iosBytesOffset = 28;
-    return img.Image.fromBytes(
-      width: cameraImage.width,
-      height: cameraImage.height,
-      bytes: plane.bytes.buffer,
-      rowStride: plane.bytesPerRow,
-      bytesOffset: iosBytesOffset,
-      order: img.ChannelOrder.bgra,
-    );
-  }
+  // img.Image _convertBGRA8888ToImage(CameraImage cameraImage) {
+  //   final plane = cameraImage.planes[0];
+  //   var iosBytesOffset = 28;
+  //   return img.Image.fromBytes(
+  //     width: cameraImage.width,
+  //     height: cameraImage.height,
+  //     bytes: plane.bytes.buffer,
+  //     rowStride: plane.bytesPerRow,
+  //     bytesOffset: iosBytesOffset,
+  //     order: img.ChannelOrder.bgra,
+  //   );
+  // }
 
-  img.Image _convertNV21(CameraImage image) {
-    final width = image.width.toInt();
-    final height = image.height.toInt();
+  // img.Image _convertNV21(CameraImage image) {
+  //   final width = image.width.toInt();
+  //   final height = image.height.toInt();
 
-    Uint8List yuv420sp = image.planes[0].bytes;
+  //   Uint8List yuv420sp = image.planes[0].bytes;
 
-    final outImg = img.Image(height: height, width: width);
-    final int frameSize = width * height;
+  //   final outImg = img.Image(height: height, width: width);
+  //   final int frameSize = width * height;
 
-    for (int j = 0, yp = 0; j < height; j++) {
-      int uvp = frameSize + (j >> 1) * width, u = 0, v = 0;
-      for (int i = 0; i < width; i++, yp++) {
-        int y = (0xff & yuv420sp[yp]) - 16;
-        if (y < 0) y = 0;
-        if ((i & 1) == 0) {
-          v = (0xff & yuv420sp[uvp++]) - 128;
-          u = (0xff & yuv420sp[uvp++]) - 128;
-        }
-        int y1192 = 1192 * y;
-        int r = (y1192 + 1634 * v);
-        int g = (y1192 - 833 * v - 400 * u);
-        int b = (y1192 + 2066 * u);
+  //   for (int j = 0, yp = 0; j < height; j++) {
+  //     int uvp = frameSize + (j >> 1) * width, u = 0, v = 0;
+  //     for (int i = 0; i < width; i++, yp++) {
+  //       int y = (0xff & yuv420sp[yp]) - 16;
+  //       if (y < 0) y = 0;
+  //       if ((i & 1) == 0) {
+  //         v = (0xff & yuv420sp[uvp++]) - 128;
+  //         u = (0xff & yuv420sp[uvp++]) - 128;
+  //       }
+  //       int y1192 = 1192 * y;
+  //       int r = (y1192 + 1634 * v);
+  //       int g = (y1192 - 833 * v - 400 * u);
+  //       int b = (y1192 + 2066 * u);
 
-        if (r < 0) {
-          r = 0;
-        } else if (r > 262143) {
-          r = 262143;
-        }
+  //       if (r < 0) {
+  //         r = 0;
+  //       } else if (r > 262143) {
+  //         r = 262143;
+  //       }
 
-        if (g < 0) {
-          g = 0;
-        } else if (g > 262143) {
-          g = 262143;
-        }
-        if (b < 0) {
-          b = 0;
-        } else if (b > 262143) {
-          b = 262143;
-        }
+  //       if (g < 0) {
+  //         g = 0;
+  //       } else if (g > 262143) {
+  //         g = 262143;
+  //       }
+  //       if (b < 0) {
+  //         b = 0;
+  //       } else if (b > 262143) {
+  //         b = 262143;
+  //       }
 
-        outImg.setPixelRgb(i, j, ((r << 6) & 0xff0000) >> 16,
-            ((g >> 2) & 0xff00) >> 8, (b >> 10) & 0xff);
-      }
-    }
-    return outImg;
-  }
+  //       outImg.setPixelRgb(i, j, ((r << 6) & 0xff0000) >> 16,
+  //           ((g >> 2) & 0xff00) >> 8, (b >> 10) & 0xff);
+  //     }
+  //   }
+  //   return outImg;
+  // }
 
   void dispose() {
     recognitionModel.close();
