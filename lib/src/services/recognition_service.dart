@@ -135,18 +135,8 @@ class RecognitionService {
     final angle = Platform.isIOS ? sensorOrientation : rotationCompensation;
     if (cameraImageFrame != null) {
       // Run image preprocessing in a background thread (doesn't block UI).
-      // image = await compute(
-      //   _preprocessCameraImage,
-      //   (
-      //     bytes: cameraImageFrame.planes[0].bytes,
-      //     width: cameraImageFrame.width,
-      //     height: cameraImageFrame.height,
-      //     bytesPerRow: cameraImageFrame.planes[0].bytesPerRow,
-      //     angle: angle,
-      //     isIOS: Platform.isIOS,
-      //   ),
-      // );
-      image = _preprocessCameraImage(
+      image = await compute(
+        _preprocessCameraImage,
         (
           bytes: cameraImageFrame.planes[0].bytes,
           width: cameraImageFrame.width,
@@ -156,6 +146,16 @@ class RecognitionService {
           isIOS: Platform.isIOS,
         ),
       );
+      // image = _preprocessCameraImage(
+      //   (
+      //     bytes: cameraImageFrame.planes[0].bytes,
+      //     width: cameraImageFrame.width,
+      //     height: cameraImageFrame.height,
+      //     bytesPerRow: cameraImageFrame.planes[0].bytesPerRow,
+      //     angle: angle,
+      //     isIOS: Platform.isIOS,
+      //   ),
+      // );
     } else if (localImageFrame != null) {
       image = localImageFrame;
     }
