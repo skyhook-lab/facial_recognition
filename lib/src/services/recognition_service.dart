@@ -128,11 +128,12 @@ class RecognitionService {
   }) async {
     recognitions.clear();
     img.Image? image;
+
+    if (Platform.isAndroid) {
+      rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
+    }
     final angle = Platform.isIOS ? sensorOrientation : rotationCompensation;
     if (cameraImageFrame != null) {
-      if (Platform.isAndroid) {
-        rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
-      }
       // Run image preprocessing in a background thread (doesn't block UI).
       // image = await compute(
       //   _preprocessCameraImage,
@@ -190,6 +191,13 @@ class RecognitionService {
     required int angle,
     required Rect faceRect,
   }) {
+    if (Platform.isAndroid) {
+      return img.copyCrop(image,
+          x: faceRect.left.toInt(),
+          y: faceRect.top.toInt(),
+          width: faceRect.width.toInt(),
+          height: faceRect.height.toInt());
+    }
     int x = faceRect.left.round();
     int y = faceRect.top.round();
     int w = faceRect.width.round();
