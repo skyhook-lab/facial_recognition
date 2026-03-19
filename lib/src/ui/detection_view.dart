@@ -48,6 +48,8 @@ class DetectionView extends StatefulWidget {
 
   final bool enabled;
 
+  final bool detectInvalidFace;
+
   /// [DetectionView] class is responsible for displaying the camera feed and performing face detection and face recognition.
   const DetectionView({
     super.key,
@@ -62,6 +64,7 @@ class DetectionView extends StatefulWidget {
     this.customFaceOverlayShape,
     this.loadingWidget,
     this.onRecognizedUsersChanged,
+    this.detectInvalidFace = false,
   });
 
   @override
@@ -181,6 +184,7 @@ class DetectionViewState extends State<DetectionView>
         recognitions: recognitions,
         cameraImageFrame: image,
         faces: detectedFaces,
+        detectInvalidFace: widget.detectInvalidFace,
       );
 
       if (success) {
