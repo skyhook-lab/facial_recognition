@@ -144,26 +144,24 @@ class DetectionViewState extends State<DetectionView>
         threshold: widget.threshold,
       );
 
-      cameraController!.startImageStream(
-        (image) async {
-          if (!widget.enabled || !mounted) {
-            return;
-          }
-
-          frameCount++;
-          if (frameCount % widget.frameSkipCount == 0) {
-            if (!isBusy) {
-              isBusy = true;
-              _analyzeFrame(image);
-            }
-          }
-        },
-      );
+      cameraController!.startImageStream(_onCameraFrame);
 
       if (mounted) {
         setState(() {});
       }
     });
+  }
+
+  Future<void> _onCameraFrame(CameraImage image) async {
+    if (!widget.enabled || !mounted || isBusy) {
+      return;
+    }
+
+    isBusy = true;
+    await cameraController?.stopImageStream();
+    await _analyzeFrame(image);
+    isBusy = false;
+    await cameraController?.startImageStream(_onCameraFrame);
   }
 
   Future<void> _analyzeFrame(CameraImage image) async {
