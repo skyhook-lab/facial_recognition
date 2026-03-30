@@ -130,10 +130,6 @@ class RecognitionService {
     recognitions.clear();
     img.Image? image;
 
-    if (Platform.isAndroid) {
-      rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
-    }
-    final angle = Platform.isIOS ? sensorOrientation : rotationCompensation;
     if (cameraImageFrame != null) {
       // Run image preprocessing in a background thread (doesn't block UI).
       // image = await compute(
@@ -153,7 +149,7 @@ class RecognitionService {
           width: cameraImageFrame.width,
           height: cameraImageFrame.height,
           bytesPerRow: cameraImageFrame.planes[0].bytesPerRow,
-          angle: angle,
+          angle: sensorOrientation,
           isIOS: Platform.isIOS,
         ),
       );
@@ -166,7 +162,11 @@ class RecognitionService {
     for (Face face in faces) {
       Rect faceRect = face.boundingBox;
       //crop face
-      croppedFace = _cropFaces(image: image!, angle: angle, faceRect: faceRect);
+      croppedFace = _cropFaces(
+        image: image!,
+        angle: sensorOrientation,
+        faceRect: faceRect,
+      );
 
       //pass cropped face to face recognition model
       recognizedUser = recognitionModel.recognize(
@@ -176,8 +176,9 @@ class RecognitionService {
           face: face);
 
       log('recognized user: ${recognizedUser?.name}, distance: ${recognizedUser?.distance} < $threshold');
-      if (detectInvalidFace || (recognizedUser!.distance <= threshold &&
-          recognizedUser!.distance >= 0)) {
+      if (detectInvalidFace ||
+          (recognizedUser!.distance <= threshold &&
+              recognizedUser!.distance >= 0)) {
         recognitions.add(recognizedUser!);
         log('Face Recognized !');
         isRecognized = true;
