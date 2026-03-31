@@ -170,16 +170,22 @@ class RecognitionService {
 
       //pass cropped face to face recognition model
       recognizedUser = recognitionModel.recognize(
-          users: users,
-          croppedFace: croppedFace,
-          location: faceRect,
-          face: face);
+        users: users,
+        croppedFace: croppedFace,
+        location: faceRect,
+        face: face,
+      );
+
+      // release memory of cropped face as it's not needed anymore
+      croppedFace = null;
 
       log('recognized user: ${recognizedUser?.name}, distance: ${recognizedUser?.distance} < $threshold');
       if (detectInvalidFace ||
           (recognizedUser!.distance <= threshold &&
               recognizedUser!.distance >= 0)) {
-        recognitions.add(recognizedUser!);
+        recognitions.add(
+          recognizedUser!.copyWith(croppedFace: image),
+        ); // To not share the cropped face to the app
         log('Face Recognized !');
         isRecognized = true;
       }
