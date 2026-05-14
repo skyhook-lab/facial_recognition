@@ -282,7 +282,7 @@ class FacesTracker extends ChangeNotifier {
   }
 
   static Future<String> _getTemporaryFilePath() async {
-    final directory = await getTemporaryDirectory();
+    final directory = await getApplicationDocumentsDirectory();
     final filePath = '${directory.path}/recognized_face.jpg';
     return filePath;
   }
