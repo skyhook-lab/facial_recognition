@@ -254,7 +254,6 @@ class FacesTracker extends ChangeNotifier {
   }
 
   static Image _normalizeImage(Image image, int orientation, bool frontFacing) {
-    print('orientation: $orientation, frontFacing: $frontFacing');
     final rotation = Platform.isAndroid ? orientation ~/ 90 : 0;
 
     if (rotation != 0) {
