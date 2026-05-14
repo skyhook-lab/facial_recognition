@@ -215,9 +215,6 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       debugPrint('No match found for the reference face.');
       return;
     }
-    print(
-      'Match result: ${match.name} (ID: ${match.id}, similarity: ${match.similarity}). liveness: ${match.liveness}',
-    );
     widget.onMatchResult(match);
   }
 
