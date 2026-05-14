@@ -1,3 +1,0 @@
-C:/Users/Caudoux/Documents/projets/serenity-mobile/facial_recognition/android/.cxx/Debug/6p2u3r1g/x86/CMakeFiles/flutter_face_sdk.dir
-C:/Users/Caudoux/Documents/projets/serenity-mobile/facial_recognition/android/.cxx/Debug/6p2u3r1g/x86/CMakeFiles/edit_cache.dir
-C:/Users/Caudoux/Documents/projets/serenity-mobile/facial_recognition/android/.cxx/Debug/6p2u3r1g/x86/CMakeFiles/rebuild_cache.dir

@@ -84,6 +84,15 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     initialize();
   }
 
+  @override
+  void didUpdateWidget(covariant FaceRecognitionPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.similarityThreshold != widget.similarityThreshold) {
+      _tracker.similarityThreshold = widget.similarityThreshold;
+    }
+    _tracker.enableSaveFrame = widget.enabled;
+  }
+
   Future<void> _requestStoragePermission() async {
     final status = await Permission.storage.status;
     if (status.isGranted) {
@@ -100,10 +109,6 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
-      _tracker.saveTracker();
-    }
-
     if (!_controller.value.isInitialized) {
       return;
     }
@@ -135,8 +140,7 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       await initializeLuxand(widget.licenseKey);
       debugPrint('[Face] <Init> Luxand library initialized.');
       if (!_trackerInitialized) {
-        _tracker =
-            FacesTracker(similarityThreshold: widget.similarityThreshold);
+        _tracker = FacesTracker(similarityThreshold: 0.01);
         _tracker.addListener(_onTrackerUpdate);
         _controller = _getCameraController();
         _painter = FacesPainter(
@@ -194,7 +198,7 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     return error.toString();
   }
 
-  void _onTrackerUpdate() {
+  Future<void> _onTrackerUpdate() async {
     if (_trackerState != _tracker.state) {
       _trackerState = _tracker.state;
       widget.onTrackerStateChanged(_trackerState);
@@ -206,16 +210,20 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     if (_trackerState != FaceTrackerState.idsReady) {
       return;
     }
-    final FaceMatchResult match = _findMatch(_userFace);
+    final FaceMatchResult match = await _findMatch(_userFace);
+    if (match.similarity <= 0) {
+      debugPrint('No match found for the reference face.');
+      return;
+    }
     print(
       'Match result: ${match.name} (ID: ${match.id}, similarity: ${match.similarity}). liveness: ${match.liveness}',
     );
     widget.onMatchResult(match);
   }
 
-  FaceMatchResult _findMatch(FSDK.Image img) {
+  Future<FaceMatchResult> _findMatch(FSDK.Image img) async {
     try {
-      return _tracker.matchFace(img);
+      return await _tracker.matchFace(img);
     } on FSDK.FaceNotFoundError {
       return FaceMatchResult("", -1, 0, 0);
     }

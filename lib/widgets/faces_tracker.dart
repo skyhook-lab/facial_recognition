@@ -3,6 +3,7 @@ import 'dart:isolate';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart' hide Image;
+import 'package:flutter/services.dart';
 import 'package:flutter_face_sdk/converter.dart' show ImageConverter;
 import 'package:flutter_face_sdk/flutter_face_sdk.dart'
     show
@@ -22,16 +23,20 @@ class _FacesTrackerIsolateInfo {
   final SendPort port;
   final int trackerHandle;
   final BufferInfo idsBufferInfo;
+  final RootIsolateToken rootIsolateToken;
 
-  _FacesTrackerIsolateInfo(this.port, this.trackerHandle, this.idsBufferInfo);
+  _FacesTrackerIsolateInfo(
+      this.port, this.trackerHandle, this.idsBufferInfo, this.rootIsolateToken);
 }
 
 class _WorkerData {
   final int image;
   final int orientation;
   final bool frontFacing;
+  final bool enableSaveFrame;
 
-  _WorkerData(this.image, this.orientation, this.frontFacing);
+  _WorkerData(
+      this.image, this.orientation, this.frontFacing, this.enableSaveFrame);
 }
 
 class FaceWrapper {
@@ -80,6 +85,8 @@ class FaceWrapper {
       _liveness = GetValueConfidence(livenessAttribute, "Liveness");
     } on FSDK.AttributeNotDetectedError {
       return false;
+    } catch (_) {
+      return false;
     } finally {
       _tracker.unlockID(_id);
     }
@@ -100,28 +107,31 @@ class FaceMatchResult {
   final int id;
   final double similarity;
   final double liveness;
-  final Image? image;
+  final String? matchImagePath;
 
   FaceMatchResult(
     this.name,
     this.id,
     this.similarity,
     this.liveness, {
-    this.image,
+    this.matchImagePath,
   });
 }
 
 class FacesTracker extends ChangeNotifier {
-  static const _path = 'tracker.bin';
-
-  String _trackerPath = "";
   FaceTrackerState _state = FaceTrackerState.notInitialized;
   FaceTrackerState get state => _state;
+
+  bool _enableSaveFrame = true;
+
+  set enableSaveFrame(bool enable) {
+    _enableSaveFrame = enable;
+  }
 
   void _onStateChange(FaceTrackerState newState) {
     bool hasChanged = _state != newState;
     _state = newState;
-    if (hasChanged) {
+    if (hasChanged && hasListeners) {
       notifyListeners();
     }
   }
@@ -138,38 +148,28 @@ class FacesTracker extends ChangeNotifier {
   int get width => _converter.width;
   int get height => _converter.height;
 
-  final double similarityThreshold;
+  double similarityThreshold;
 
   FacesTracker({
     required this.similarityThreshold,
   });
 
-  void saveTracker() {
-    _tracker.saveToFile(_trackerPath);
-  }
-
   @override
   void dispose() {
     _isolate.kill(priority: Isolate.immediate);
-
     _converter.free();
-
-    saveTracker();
     _tracker.free();
-
     super.dispose();
   }
 
-  Future<void> _openTracker() async {
-    final directory = await getApplicationDocumentsDirectory();
-    _trackerPath = '${directory.path}/$_path';
-
-    try {
-      Tracker.fromFile(_trackerPath, tracker: _tracker);
-    } on Error {
-      // Couldn't load tracker from memory, file may not exist
+  Future<void> _initTracker() async {
+    // Remove old saved image if exists
+    final tempDir = await _getTemporaryFilePath();
+    final tempFile = File(tempDir);
+    if (await tempFile.exists()) {
+      await tempFile.delete();
+      debugPrint('Deleted old temporary face image at $tempDir');
     }
-
     _setTrackerParameters();
   }
 
@@ -190,49 +190,17 @@ class FacesTracker extends ChangeNotifier {
     });
   }
 
-  static void _worker(_FacesTrackerIsolateInfo info) async {
-    final sendPort = info.port;
-    final tracker = Tracker.fromHandle(info.trackerHandle);
-    final ids = Int64Buffer.fromInfo(info.idsBufferInfo);
-
-    final receivePort = ReceivePort();
-    receivePort.listen((data) {
-      var image = Image.fromHandle(data.image);
-
-      final rotation = Platform.isAndroid
-          ? data.orientation ~/ 90
-          : -(data.orientation ~/ 90) + 1;
-
-      if (rotation != 0) {
-        var rotatedImage = image.rotate90(rotation);
-        image.free();
-        image = rotatedImage;
-      }
-
-      if (data.frontFacing && !Platform.isIOS) {
-        image.mirror(true);
-      }
-
-      ids.length = 0;
-      try {
-        tracker.feedFrame(0, image, ids: ids);
-      } on FaceNotFoundError {
-        /*No faces were found*/
-      }
-
-      image.free();
-      sendPort.send(null);
-    });
-
-    sendPort.send(receivePort.sendPort);
-  }
-
   void _initialize() async {
-    await _openTracker();
+    await _initTracker();
 
     _receive.listen((msg) async {
       if (msg is SendPort) {
         _send = msg;
+        _state = FaceTrackerState.waitingForImage;
+        return;
+      }
+
+      if (!_enableSaveFrame) {
         _state = FaceTrackerState.waitingForImage;
         return;
       }
@@ -249,8 +217,74 @@ class FacesTracker extends ChangeNotifier {
         _receive.sendPort,
         _tracker.handle,
         _ids.getInfo(),
+        RootIsolateToken.instance!,
       ),
     );
+  }
+
+  static void _worker(_FacesTrackerIsolateInfo info) async {
+    BackgroundIsolateBinaryMessenger.ensureInitialized(info.rootIsolateToken);
+
+    final sendPort = info.port;
+    final tracker = Tracker.fromHandle(info.trackerHandle);
+    final ids = Int64Buffer.fromInfo(info.idsBufferInfo);
+
+    final receivePort = ReceivePort();
+    receivePort.listen((data) async {
+      _WorkerData wData = data as _WorkerData;
+      Image image = Image.fromHandle(wData.image);
+
+      image = _normalizeImage(image, wData.orientation, wData.frontFacing);
+
+      ids.length = 0;
+      try {
+        tracker.feedFrame(0, image, ids: ids);
+        if (wData.enableSaveFrame && ids.isNotEmpty) {
+          await _saveFaceToFile(image);
+        }
+      } on FaceNotFoundError {
+        /*No faces were found*/
+      }
+
+      image.free();
+      sendPort.send(null);
+    });
+
+    sendPort.send(receivePort.sendPort);
+  }
+
+  static Image _normalizeImage(Image image, int orientation, bool frontFacing) {
+    final rotation =
+        Platform.isAndroid ? orientation ~/ 90 : -(orientation ~/ 90) + 1;
+
+    if (rotation != 0) {
+      var rotatedImage = image.rotate90(rotation);
+      image.free();
+      image = rotatedImage;
+    }
+
+    if (frontFacing && !Platform.isIOS) {
+      image.mirror(true);
+    }
+    return image;
+  }
+
+  static Future<File?> _saveFaceToFile(Image img) async {
+    try {
+      final filePath = await _getTemporaryFilePath();
+      _normalizeImage(img, 0, false).saveToFile(filePath);
+      debugPrint('Face image saved to $filePath');
+      return File(filePath);
+    } catch (e) {
+      debugPrint('Error saving face image: $e');
+      return null;
+    }
+  }
+
+  static Future<String> _getTemporaryFilePath() async {
+    final directory = await getTemporaryDirectory();
+    final filePath = '${directory.path}/recognized_face.jpg';
+    return filePath;
   }
 
   void process(CameraImage image, int orientation, bool frontFacing) async {
@@ -265,11 +299,22 @@ class FacesTracker extends ChangeNotifier {
     }
 
     _onStateChange(FaceTrackerState.waitingForIds);
-    final frameImage = _converter.convert(image);
-    final workerImage = frameImage.copy();
-    _fsdkImage?.free();
-    _fsdkImage = frameImage;
-    _send.send(_WorkerData(workerImage.handle, orientation, frontFacing));
+    try {
+      final frameImage = _converter.convert(image);
+      final workerImage = frameImage.copy();
+      _fsdkImage?.free();
+      _fsdkImage = frameImage;
+      _send.send(
+        _WorkerData(
+          workerImage.handle,
+          orientation,
+          frontFacing,
+          _enableSaveFrame,
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error processing camera image: $e');
+    }
   }
 
   List<FaceWrapper> faces() {
@@ -299,7 +344,7 @@ class FacesTracker extends ChangeNotifier {
     return name;
   }
 
-  FaceMatchResult matchFace(Image img) {
+  Future<FaceMatchResult> matchFace(Image img) async {
     FSDK.FaceTemplate faceTemplate = FSDK.GetFaceTemplate(img);
 
     var similarityResults = _tracker.matchFaces(
@@ -315,7 +360,13 @@ class FacesTracker extends ChangeNotifier {
 
       String name = getNameForId(id);
 
-      return FaceMatchResult(name, id, similarity, liveness, image: img);
+      return FaceMatchResult(
+        name,
+        id,
+        similarity,
+        liveness,
+        matchImagePath: await _getTemporaryFilePath(),
+      );
     }
 
     return FaceMatchResult("", -1, 0.0, 0.0);
