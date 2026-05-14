@@ -1,0 +1,7 @@
+${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks.sh
+${BUILT_PRODUCTS_DIR}/camera_avfoundation/camera_avfoundation.framework
+${PODS_ROOT}/../.symlinks/plugins/flutter_face_sdk/ios/Frameworks/fsdk.framework
+${BUILT_PRODUCTS_DIR}/flutter_face_sdk/flutter_face_sdk.framework
+${BUILT_PRODUCTS_DIR}/image_picker_ios/image_picker_ios.framework
+${BUILT_PRODUCTS_DIR}/path_provider_foundation/path_provider_foundation.framework
+${BUILT_PRODUCTS_DIR}/url_launcher_ios/url_launcher_ios.framework

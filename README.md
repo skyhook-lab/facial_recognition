@@ -1,98 +1,42 @@
-A Flutter package for face detection and recognition using Google ML Kit and TensorFlow Lite.
+## [FaceSDK](https://www.luxand.com/facesdk/?utm_source=github&utm_medium=readmd&utm_campaign=header) · [CloudAPI](https://luxand.cloud/?utm_source=github&utm_medium=readmd&utm_campaign=header) · [LinkedIn](https://www.linkedin.com/company/luxand-inc.) · [Contact](mailto:support@luxand.com)
 
-<div align="center"> <img src="https://github.com/Badieh/facial_recognition/blob/4dc856eb22fea412d6665764e2706893224f47a6/doc/cover.jpg?raw=true" alt="cover" width="500" height="400" /> </div>
 
-## Features
+<table style="border-collapse: collapse; border: none;">
 
-- **Face Detection**: Detect faces in images using Google ML Kit.
-- **Face Recognition**: Recognize faces by comparing embeddings with registered users.
-- **Customizable Overlays**: Display custom overlays around detected faces.
-- **Performance Optimization**: Customizable resolution of the camera feed and performance mode of the face detector.
-- **Offline Capability**: Perform face detection and recognition without an internet connection.
+# FaceSDK \- Flutter (iOS, Android)
 
-## Getting Started
 
-## Installation
 
-1. Add the package to your project:
+## Running the sample
 
-```sh
-flutter pub add facial_recognition
-```
+To build and run the sample use **"flutter run"** command from the "example" directory. Or you can run it from the IDE.
 
-2. Import the package in your Dart code:
+### iOS
 
-```dart
-import 'package:facial_recognition/facial_recognition.dart';
-```
+1. Open Xcode on your Mac.
 
-## Usage
+2. Open the iOS project by navigating to the "example/ios" folder and double-clicking the `.xcworkspace` file.
 
-### Initialize Cameras
+3. Once Xcode is open, select the target device or simulator you want to run the app on from the dropdown menu in the top-left corner.
 
-```dart
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  final cameras = await availableCameras();
-  // choose which camera you want to use
-  final cameraDescription = cameras.first;
-}
-```
+4. Click the "Run" button (▶️) to build and run the app on the selected device/simulator.
 
-### Register Users
+If you encounter any issues during the setup or while running the app, please make sure the correct target device/simulator is selected in Xcode.
 
-```dart
-  final List<UserModel> users = await registerUsers(
-    registerUserInputs: [
-      RegisterUserInputModel(name: 'User1', imagePath: 'path/to/image1.jpg'),
-      RegisterUserInputModel(name: 'User2', imagePath: 'path/to/image2.jpg'),
-    ],
-    cameraDescription: cameraDescription,
-  );
-```
+### Android
 
-#### Note
+You need to install CMake and NDK (v28.2.13676358) using the Android Package Manager.
 
-The images provided to register users must be a close-up photo with a white background, similar to a passport or ID image, and should be of high quality. This can significantly affect the model's efficiency and accuracy.
+1. Open Android Studio on your computer.
 
-<div align="center"> <img src="https://github.com/Badieh/facial_recognition/blob/4dc856eb22fea412d6665764e2706893224f47a6/doc/user_example.png?raw=true" alt="user image example" width="300" /> </div>
+2. Click on "Open an existing Android Studio project" or "File" > "Open" from the top menu.
 
-### Perform Face Recognition
+3. Navigate to the "example/android" folder and select it.
 
-```dart
-  Set<UserModel>? recognizedUsers = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => DetectionView(
-                          users: users,
-                          cameraDescription: cameraDescription,
-                        ),
-                      ));
-                  if (recognizedUsers != null && recognizedUsers.isNotEmpty) {
-                    log('recognized users : $recognizedUsers');
-                  }
-```
+4. Wait for Android Studio to index the files and download any necessary Gradle dependencies. This might take a few minutes.
 
-### Parameters
+5. Once everything is set up, you should see a green "Run" button (▶️) at the top. Beside it, there's a dropdown menu. From this dropdown, you can select the Android emulator you've previously set up or any connected Android device.
 
-The `DetectionView` widget provides several parameters that can be customized to adjust the behavior and appearance of the face detection and recognition process:
+6. Click the "Run" button (▶️) to build and run the app on the selected device/emulator.
 
-| Parameter                      | Type                   | Default Value                    | Description                                                                                                                                                                                                                |
-| ------------------------------ | ---------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cameraDescription` (required) | `CameraDescription`    | -                                | The camera description to be used for the camera feed.                                                                                                                                                                     |
-| `users` (required)             | `List<UserModel>`      | -                                | A list of registered `UserModel` objects.                                                                                                                                                                                  |
-| `resolutionPreset`             | `ResolutionPreset`     | `ResolutionPreset.high`          | The resolution preset for the camera feed.                                                                                                                                                                                 |
-| `frameSkipCount`               | `int`                  | 10                               | The number of frames to be skipped before processing the next frame. This is used to throttle the number of frames processed to help optimize the performance of your application by reducing the computational load.      |
-| `threshold`                    | `double`               | 0.8                              | The minimum distance between the face embeddings to be considered as a match. If the distance is less than the threshold, the face is recognized. Decrease the threshold to increase the accuracy of the face recognition. |
-| `faceDetectorPerformanceMode`  | `FaceDetectorMode`     | `FaceDetectorMode.accurate`      | The performance mode of the face detector.                                                                                                                                                                                 |
-| `faceOverlayShapeType`         | `FaceOverlayShapeType` | `FaceOverlayShapeType.rectangle` | The shape type of the face overlay.                                                                                                                                                                                        |
-| `customFaceOverlayShape`       | `FaceOverlayShape?`    | null                             | A custom face overlay shape to be used for the face overlay. `faceOverlayShapeType` must be set to `FaceOverlayShapeType.custom` to use this. Can be customized by extending the `FaceOverlayShape` class.                 |
-| `loadingWidget`                | `Widget?`              | null                             | A custom loading widget to be displayed while the camera is initializing.                                                                                                                                                  |
-
-## Authors
-
-- Badieh Nader - [GitHub](https://github.com/Badieh)
-
-## Acknowledgments
-
-This package utilizes a FaceNet model for face recognition, as described in the paper "FaceNet: A Unified Embedding for Face Recognition and Clustering" (Schroff et al., 2015). The model has been converted to TensorFlow Lite format. Model source: Unknown.
+**Note**: Before running the app on a real device, ensure that your device has USB Debugging enabled and is set to "File Transfer" mode. You might also need to confirm a prompt on your device to allow USB debugging from your computer.

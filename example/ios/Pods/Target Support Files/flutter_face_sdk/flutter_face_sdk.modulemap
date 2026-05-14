@@ -1,0 +1,6 @@
+framework module flutter_face_sdk {
+  umbrella header "flutter_face_sdk-umbrella.h"
+
+  export *
+  module * { export * }
+}

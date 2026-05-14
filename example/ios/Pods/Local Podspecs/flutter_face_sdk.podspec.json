@@ -1,0 +1,34 @@
+{
+  "name": "flutter_face_sdk",
+  "version": "0.0.1",
+  "summary": "A new Flutter FFI plugin project.",
+  "description": "A new Flutter FFI plugin project.",
+  "homepage": "http://example.com",
+  "license": {
+    "file": "../LICENSE"
+  },
+  "authors": {
+    "Your Company": "email@example.com"
+  },
+  "source": {
+    "path": "."
+  },
+  "source_files": "Classes/**/*",
+  "dependencies": {
+    "Flutter": [
+
+    ]
+  },
+  "platforms": {
+    "ios": "9.0"
+  },
+  "preserve_paths": "Frameworks/**/*",
+  "vendored_frameworks": "Frameworks/fsdk.framework",
+  "pod_target_xcconfig": {
+    "OTHER_LDFLAGS": "-framework fsdk",
+    "DEFINES_MODULE": "YES",
+    "EXCLUDED_ARCHS[sdk=iphonesimulator*]": "i386"
+  },
+  "swift_versions": "5.0",
+  "swift_version": "5.0"
+}

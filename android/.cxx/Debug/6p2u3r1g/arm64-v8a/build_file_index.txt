@@ -1,0 +1,1 @@
+C:\Users\Caudoux\Documents\projets\serenity-mobile\facial_recognition\src\CMakeLists.txt
