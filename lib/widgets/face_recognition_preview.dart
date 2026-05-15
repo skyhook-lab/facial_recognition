@@ -187,7 +187,6 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       widget.onTrackerStateChanged(_trackerState);
     }
     if (!widget.enabled) {
-      debugPrint('Face recognition is disabled, skipping tracker update.');
       return;
     }
     if (_trackerState != FaceTrackerState.idsReady) {
