@@ -17,6 +17,7 @@ import 'package:flutter_face_sdk/flutter_face_sdk.dart'
         Tracker,
         GetValueConfidence;
 import 'package:flutter_face_sdk/flutter_face_sdk.dart' as FSDK;
+import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
 import 'package:path_provider/path_provider.dart';
 
 class _FacesTrackerIsolateInfo {
@@ -356,7 +357,6 @@ class FacesTracker extends ChangeNotifier {
       final similarity = similarityResults[0].similarity;
       final FaceWrapper face = FaceWrapper(id, _tracker);
       final double liveness = face.checkLiveness() ? face.liveness : 0.0;
-
       String name = getNameForId(id);
 
       return FaceMatchResult(

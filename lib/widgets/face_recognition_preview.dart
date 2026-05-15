@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_face_sdk/flutter_face_sdk.dart' as FSDK;
 import 'package:flutter_face_sdk/widgets/faces_painter.dart';
 import 'package:flutter_face_sdk/widgets/faces_tracker.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 const luxandURL = 'https://www.luxand.com/facesdk';
 const luxandSwatch = MaterialColor(0xff5a95dd, <int, Color>{
@@ -46,6 +45,7 @@ class FaceRecognitionPreview extends StatefulWidget {
   final bool enabled;
   final bool displayDebugInfo;
   final double similarityThreshold;
+  final double ratio;
 
   const FaceRecognitionPreview({
     required this.licenseKey,
@@ -57,6 +57,7 @@ class FaceRecognitionPreview extends StatefulWidget {
     this.enabled = true,
     this.displayDebugInfo = false,
     this.onInitialized,
+    this.ratio = 1,
     super.key,
   });
 
@@ -87,10 +88,12 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   @override
   void didUpdateWidget(covariant FaceRecognitionPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.similarityThreshold != widget.similarityThreshold) {
-      _tracker.similarityThreshold = widget.similarityThreshold;
+    if (_trackerInitialized) {
+      if (oldWidget.similarityThreshold != widget.similarityThreshold) {
+        _tracker.similarityThreshold = widget.similarityThreshold;
+      }
+      _tracker.enableSaveFrame = widget.enabled;
     }
-    _tracker.enableSaveFrame = widget.enabled;
   }
 
   @override
@@ -226,30 +229,31 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       return _buildProgress();
     }
     return Stack(
-      alignment: Alignment.center,
+      fit: StackFit.expand,
       children: <Widget>[
         _buildCameraPreview(),
-        CustomPaint(painter: _painter, child: Container())
+        Positioned.fill(child: CustomPaint(painter: _painter)),
       ],
     );
   }
 
   Widget _buildCameraPreview() {
-    return LayoutBuilder(builder: (context, constraints) {
-      Widget child = AspectRatio(
-        aspectRatio: 1,
-        child: FittedBox(
-          fit: BoxFit.cover,
-          clipBehavior: Clip.hardEdge,
-          child: SizedBox(
-            height: constraints.maxHeight * _controller.value.aspectRatio,
-            width: constraints.maxWidth,
-            child: CameraPreview(_controller),
-          ),
+    final Size? previewSize = _controller.value.previewSize;
+
+    if (previewSize == null) {
+      return CameraPreview(_controller);
+    }
+
+    return ClipRect(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        child: SizedBox(
+          width: previewSize.height,
+          height: previewSize.width,
+          child: CameraPreview(_controller),
         ),
-      );
-      return child;
-    });
+      ),
+    );
   }
 
   Widget _buildProgress() => const Center(child: CircularProgressIndicator());
