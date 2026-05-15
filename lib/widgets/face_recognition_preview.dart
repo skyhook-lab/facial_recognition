@@ -93,20 +93,6 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     _tracker.enableSaveFrame = widget.enabled;
   }
 
-  Future<void> _requestStoragePermission() async {
-    final status = await Permission.storage.status;
-    if (status.isGranted) {
-      return;
-    }
-
-    final result = await Permission.storage.request();
-    if (result.isGranted != true) {
-      throw FSDK.PluginNoPermissionError(
-        'Storage permission is required to load the reference face image.',
-      );
-    }
-  }
-
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (!_controller.value.isInitialized) {
@@ -153,9 +139,6 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
         _trackerInitialized = true;
       }
       debugPrint('[Face] <Init> Tracker initialized.');
-
-      await _requestStoragePermission();
-      debugPrint('[Face] <Init> Storage permission granted.');
 
       await _initUserFace();
       debugPrint('[Face] <Init> User face loaded.');
