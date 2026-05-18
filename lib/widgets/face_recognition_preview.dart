@@ -154,6 +154,17 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
 
       widget.onInitialized?.call();
     } catch (e, s) {
+      if (e is FSDK.FaceNotFoundError) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            widget.onTrackerStateChanged(
+              FaceTrackerState.referenceFaceNotDetected,
+            );
+          }
+        });
+        return;
+      }
+
       debugPrint('[Face] <Init> Error during initialization: $e\n$s');
       _initError = e;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -174,6 +185,7 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   Future<void> _initUserFace() async {
     final XFile image = XFile(widget.userFacePath);
     _userFace = FSDK.Image.fromFile(image.path);
+    await _tracker.findFace(_userFace);
   }
 
   String _resolveCameraErrorMessage(Object error) {

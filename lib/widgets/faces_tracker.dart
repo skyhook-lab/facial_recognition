@@ -97,6 +97,7 @@ class FaceWrapper {
 
 enum FaceTrackerState {
   notInitialized,
+  referenceFaceNotDetected,
   initializing,
   waitingForImage,
   waitingForIds,
@@ -138,7 +139,7 @@ class FacesTracker extends ChangeNotifier {
   }
 
   late SendPort _send;
-  late Isolate _isolate;
+  Isolate? _isolate;
   Image? _fsdkImage;
 
   late final _tracker = Tracker();
@@ -157,7 +158,7 @@ class FacesTracker extends ChangeNotifier {
 
   @override
   void dispose() {
-    _isolate.kill(priority: Isolate.immediate);
+    _isolate?.kill(priority: Isolate.immediate);
     _converter.free();
     _tracker.free();
     super.dispose();
@@ -342,6 +343,11 @@ class FacesTracker extends ChangeNotifier {
     _tracker.unlockID(id);
 
     return name;
+  }
+
+  bool findFace(Image img) {
+    FSDK.FaceTemplate faceTemplate = FSDK.GetFaceTemplate(img);
+    return true;
   }
 
   Future<FaceMatchResult> matchFace(Image img) async {
