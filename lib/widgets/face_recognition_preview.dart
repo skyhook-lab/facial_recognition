@@ -45,7 +45,6 @@ class FaceRecognitionPreview extends StatefulWidget {
   final bool enabled;
   final bool displayDebugInfo;
   final double similarityThreshold;
-  final double ratio;
 
   const FaceRecognitionPreview({
     required this.licenseKey,
@@ -57,7 +56,6 @@ class FaceRecognitionPreview extends StatefulWidget {
     this.enabled = true,
     this.displayDebugInfo = false,
     this.onInitialized,
-    this.ratio = 1,
     super.key,
   });
 
@@ -204,7 +202,8 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     if (!widget.enabled) {
       return;
     }
-    if (_trackerState != FaceTrackerState.idsReady) {
+    if (![FaceTrackerState.idsReady, FaceTrackerState.waitingForIds]
+        .contains(_trackerState)) {
       return;
     }
     final FaceMatchResult match = await _findMatch(_userFace);
