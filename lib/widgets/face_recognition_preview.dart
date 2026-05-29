@@ -62,10 +62,10 @@ class FaceRecognitionPreview extends StatefulWidget {
   });
 
   @override
-  State<StatefulWidget> createState() => _FaceRecognitionPreviewState();
+  FaceRecognitionPreviewState createState() => FaceRecognitionPreviewState();
 }
 
-class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
+class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     with WidgetsBindingObserver {
   late final FacesTracker _tracker;
   late FacesPainter _painter;
@@ -221,6 +221,10 @@ class _FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     } on FSDK.FaceNotFoundError {
       return FaceMatchResult("", -1, 0, 0);
     }
+  }
+
+  void reset() {
+    _tracker.reset();
   }
 
   void _process(CameraImage image) {

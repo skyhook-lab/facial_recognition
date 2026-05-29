@@ -175,6 +175,12 @@ class FacesTracker extends ChangeNotifier {
     _setTrackerParameters();
   }
 
+  void reset() {
+    _tracker.clear();
+    _setTrackerParameters();
+    _onStateChange(FaceTrackerState.waitingForImage);
+  }
+
   void _setTrackerParameters() {
     _tracker.setMultipleParameters({
       'ContinuousVideoFeed': true,
