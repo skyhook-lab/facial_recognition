@@ -131,9 +131,8 @@ class FacesTracker extends ChangeNotifier {
   }
 
   void _onStateChange(FaceTrackerState newState) {
-    bool hasChanged = _state != newState;
     _state = newState;
-    if (hasChanged && hasListeners) {
+    if (hasListeners) {
       notifyListeners();
     }
   }
