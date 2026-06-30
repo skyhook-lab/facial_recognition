@@ -125,6 +125,7 @@ class FacesTracker extends ChangeNotifier {
   FaceTrackerState get state => _state;
 
   bool _enableSaveFrame = true;
+  DateTime? _lastProcessAt;
 
   set enableSaveFrame(bool enable) {
     _enableSaveFrame = enable;
@@ -303,6 +304,13 @@ class FacesTracker extends ChangeNotifier {
     if (_state != FaceTrackerState.waitingForImage) {
       return;
     }
+
+    final now = DateTime.now();
+    if (_lastProcessAt != null &&
+        now.difference(_lastProcessAt!) < const Duration(milliseconds: 500)) {
+      return;
+    }
+    _lastProcessAt = now;
 
     _onStateChange(FaceTrackerState.waitingForIds);
     try {

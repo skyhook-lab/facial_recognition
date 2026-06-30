@@ -128,6 +128,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       debugPrint('[Face] <Init> Luxand library initialized.');
       if (!_trackerInitialized) {
         _tracker = FacesTracker(similarityThreshold: 0.01);
+        _tracker.enableSaveFrame = widget.enabled;
         _tracker.addListener(_onTrackerUpdate);
         _controller = _getCameraController();
         _painter = FacesPainter(
