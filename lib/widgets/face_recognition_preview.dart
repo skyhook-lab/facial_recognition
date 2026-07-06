@@ -43,6 +43,7 @@ class FaceRecognitionPreview extends StatefulWidget {
   final String userFacePath;
   final String licenseKey;
   final bool enabled;
+  final bool enableSaveFrame;
   final bool displayDebugInfo;
   final double similarityThreshold;
 
@@ -53,6 +54,7 @@ class FaceRecognitionPreview extends StatefulWidget {
     required this.onTrackerStateChanged,
     required this.onMatchResult,
     required this.similarityThreshold,
+    required this.enableSaveFrame,
     this.enabled = true,
     this.displayDebugInfo = false,
     this.onInitialized,
@@ -90,7 +92,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       if (oldWidget.similarityThreshold != widget.similarityThreshold) {
         _tracker.similarityThreshold = widget.similarityThreshold;
       }
-      _tracker.enableSaveFrame = widget.enabled;
+      _tracker.enableSaveFrame = widget.enableSaveFrame;
     }
   }
 
@@ -128,7 +130,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       debugPrint('[Face] <Init> Luxand library initialized.');
       if (!_trackerInitialized) {
         _tracker = FacesTracker(similarityThreshold: 0.01);
-        _tracker.enableSaveFrame = widget.enabled;
+        _tracker.enableSaveFrame = widget.enableSaveFrame;
         _tracker.addListener(_onTrackerUpdate);
         _controller = _getCameraController();
         _painter = FacesPainter(
