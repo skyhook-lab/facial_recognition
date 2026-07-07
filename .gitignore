@@ -42,3 +42,5 @@ app.*.map.json
 android/.cxx
 example/android/.gradle
 example/build/
+android/build/
+android/.gradle/
