@@ -141,6 +141,8 @@ class FacesTracker extends ChangeNotifier {
   late SendPort _send;
   Isolate? _isolate;
   Image? _fsdkImage;
+  int _lastOrientation = 0;
+  bool _lastFrontFacing = false;
 
   late final _tracker = Tracker();
   final _receive = ReceivePort();
@@ -248,7 +250,7 @@ class FacesTracker extends ChangeNotifier {
       try {
         tracker.feedFrame(0, image, ids: ids);
         if (wData.enableSaveFrame && ids.isNotEmpty) {
-          await _saveFaceToFile(image);
+          await saveFaceToFile(image);
         }
       } on FaceNotFoundError {
         /*No faces were found*/
@@ -276,7 +278,26 @@ class FacesTracker extends ChangeNotifier {
     return image;
   }
 
-  static Future<File?> _saveFaceToFile(Image img) async {
+  /// Saves the frame currently held in memory (the last one handed to
+  /// [process]) to file on demand, without requiring [enableSaveFrame] to be
+  /// continuously on. Used to fetch a face image once, right when a match is
+  /// confirmed, instead of writing to disk on every processed frame (which
+  /// causes camera freezes).
+  Future<File?> saveCurrentFrame() {
+    final image = _fsdkImage;
+    if (image == null) {
+      return Future.value(null);
+    }
+    // The frame kept in memory is the raw converted image: unlike the copy
+    // sent to the worker isolate, it was never rotated/mirrored for the
+    // camera's orientation, so it must go through the same normalization
+    // before being saved, otherwise the saved photo comes out rotated.
+    final normalized = _normalizeImage(image, _lastOrientation, _lastFrontFacing);
+    _fsdkImage = normalized;
+    return saveFaceToFile(normalized);
+  }
+
+  static Future<File?> saveFaceToFile(Image img) async {
     try {
       final filePath = await _getTemporaryFilePath();
       _normalizeImage(img, 0, false).saveToFile(filePath);
@@ -318,6 +339,8 @@ class FacesTracker extends ChangeNotifier {
       final workerImage = frameImage.copy();
       _fsdkImage?.free();
       _fsdkImage = frameImage;
+      _lastOrientation = orientation;
+      _lastFrontFacing = frontFacing;
       _send.send(
         _WorkerData(
           workerImage.handle,

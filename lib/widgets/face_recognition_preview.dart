@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -228,6 +229,12 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   void reset() {
     _tracker.reset();
   }
+
+  /// Saves the frame currently held by the tracker to file on demand. Use
+  /// this instead of `enableSaveFrame: true` when the file is only needed
+  /// once (e.g. right when a match is confirmed), to avoid the camera
+  /// freezes caused by saving on every processed frame.
+  Future<File?> captureCurrentFrame() => _tracker.saveCurrentFrame();
 
   void _process(CameraImage image) {
     _tracker.process(
