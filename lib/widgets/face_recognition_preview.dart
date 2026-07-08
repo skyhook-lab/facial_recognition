@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_face_sdk/flutter_face_sdk.dart' as FSDK;
 import 'package:flutter_face_sdk/widgets/faces_painter.dart';
 import 'package:flutter_face_sdk/widgets/faces_tracker.dart';
+import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
 
 const luxandURL = 'https://www.luxand.com/facesdk';
 const luxandSwatch = MaterialColor(0xff5a95dd, <int, Color>{
@@ -76,6 +78,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   bool _isInitializing = false;
   Object? _initError;
   bool _trackerInitialized = false;
+  CameraImage? _lastCameraImage;
 
   @override
   void initState() {
@@ -236,7 +239,133 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   /// freezes caused by saving on every processed frame.
   Future<File?> captureCurrentFrame() => _tracker.saveCurrentFrame();
 
+  /// Scans the latest raw camera frame for a QR code, without going through
+  /// the face SDK's save-to-disk pipeline (JPEG encode + file write/read),
+  /// which is too expensive to run on every processed frame. This lets QR
+  /// detection run continuously (needed since a code may appear on any
+  /// frame) without the camera freezes that continuous `enableSaveFrame`
+  /// caused.
+  Future<String?> detectQrCode() async {
+    final InputImage? inputImage = _buildBarcodeInputImage();
+    if (inputImage == null) {
+      return null;
+    }
+
+    final barcodeScanner = BarcodeScanner(formats: [BarcodeFormat.qrCode]);
+    try {
+      final barcodes = await barcodeScanner.processImage(inputImage);
+      return barcodes.isEmpty ? null : barcodes.first.rawValue;
+    } finally {
+      await barcodeScanner.close();
+    }
+  }
+
+  InputImage? _buildBarcodeInputImage() {
+    final CameraImage? image = _lastCameraImage;
+    if (image == null) {
+      return null;
+    }
+
+    final InputImageRotation rotation =
+        InputImageRotationValue.fromRawValue(
+          _controller.description.sensorOrientation,
+        ) ??
+        InputImageRotation.rotation0deg;
+
+    Uint8List bytes;
+    InputImageFormat format;
+    int bytesPerRow;
+    switch (image.format.group) {
+      case ImageFormatGroup.yuv420:
+        if (Platform.isIOS) {
+          format = InputImageFormat.yuv420;
+          bytes = image.planes.length == 1
+              ? image.planes.first.bytes
+              : Uint8List.fromList(
+                  image.planes.expand((plane) => plane.bytes).toList(),
+                );
+          bytesPerRow = image.planes.first.bytesPerRow;
+        } else {
+          // The Android ML Kit plugin only accepts NV21 or YV12 for raw
+          // bytes (it rejects YUV_420_888 outright), so the 3-plane camera
+          // buffer must be converted to NV21 first.
+          format = InputImageFormat.nv21;
+          bytes = _yuv420ToNv21(image);
+          bytesPerRow = image.width;
+        }
+        break;
+      case ImageFormatGroup.nv21:
+        format = InputImageFormat.nv21;
+        bytes = image.planes.first.bytes;
+        bytesPerRow = image.planes.first.bytesPerRow;
+        break;
+      case ImageFormatGroup.bgra8888:
+        format = InputImageFormat.bgra8888;
+        bytes = image.planes.first.bytes;
+        bytesPerRow = image.planes.first.bytesPerRow;
+        break;
+      case ImageFormatGroup.jpeg:
+      case ImageFormatGroup.unknown:
+        return null;
+    }
+
+    return InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotation,
+        format: format,
+        bytesPerRow: bytesPerRow,
+      ),
+    );
+  }
+
+  /// Converts a 3-plane YUV_420_888 [CameraImage] (Android's default camera
+  /// stream format) into a single NV21 buffer, respecting each plane's row
+  /// stride and pixel stride since Android devices commonly pad rows or
+  /// interleave the U/V planes differently.
+  static Uint8List _yuv420ToNv21(CameraImage image) {
+    final int width = image.width;
+    final int height = image.height;
+    final int ySize = width * height;
+    final Uint8List nv21 = Uint8List(ySize + (width * height ~/ 2));
+
+    final Plane yPlane = image.planes[0];
+    final int yRowStride = yPlane.bytesPerRow;
+    if (yRowStride == width) {
+      nv21.setRange(0, ySize, yPlane.bytes);
+    } else {
+      int destOffset = 0;
+      for (int row = 0; row < height; row++) {
+        final int srcOffset = row * yRowStride;
+        nv21.setRange(destOffset, destOffset + width, yPlane.bytes, srcOffset);
+        destOffset += width;
+      }
+    }
+
+    final Plane uPlane = image.planes[1];
+    final Plane vPlane = image.planes[2];
+    final int uvRowStride = vPlane.bytesPerRow;
+    final int uvPixelStride = vPlane.bytesPerPixel ?? 1;
+    final int chromaWidth = width ~/ 2;
+    final int chromaHeight = height ~/ 2;
+
+    int destOffset = ySize;
+    for (int row = 0; row < chromaHeight; row++) {
+      final int srcRowOffset = row * uvRowStride;
+      for (int col = 0; col < chromaWidth; col++) {
+        final int srcOffset = srcRowOffset + col * uvPixelStride;
+        // NV21 interleaves chroma as V,U (as opposed to NV12's U,V).
+        nv21[destOffset++] = vPlane.bytes[srcOffset];
+        nv21[destOffset++] = uPlane.bytes[srcOffset];
+      }
+    }
+
+    return nv21;
+  }
+
   void _process(CameraImage image) {
+    _lastCameraImage = image;
     _tracker.process(
       image,
       _controller.description.sensorOrientation,
