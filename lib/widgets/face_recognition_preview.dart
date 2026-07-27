@@ -50,6 +50,12 @@ class FaceRecognitionPreview extends StatefulWidget {
   final bool displayDebugInfo;
   final double similarityThreshold;
 
+  /// Whether a match with similarity 0 (no reference match found by the
+  /// native tracker) should still be reported to [onMatchResult] instead of
+  /// being silently dropped. Set this when the caller does not require the
+  /// detected face to match the reference image (e.g. a guest test).
+  final bool reportUnmatchedFaces;
+
   const FaceRecognitionPreview({
     required this.licenseKey,
     required this.userFacePath,
@@ -60,6 +66,7 @@ class FaceRecognitionPreview extends StatefulWidget {
     required this.enableSaveFrame,
     this.enabled = true,
     this.displayDebugInfo = false,
+    this.reportUnmatchedFaces = false,
     this.onInitialized,
     super.key,
   });
@@ -214,7 +221,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       return;
     }
     final FaceMatchResult match = await _findMatch(_userFace);
-    if (match.similarity <= 0) {
+    if (match.similarity <= 0 && !widget.reportUnmatchedFaces) {
       debugPrint('No match found for the reference face.');
       return;
     }
