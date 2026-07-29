@@ -111,12 +111,20 @@ class FaceMatchResult {
   final double liveness;
   final String? matchImagePath;
 
+  /// Whether the native tracker found any face at all in the frame this
+  /// result was computed from, independent of [similarity]/[liveness] --
+  /// those only measure how well a found face matches the reference image,
+  /// so they stay 0 both when no face was present and when a face was
+  /// present but unmatched. This field disambiguates the two.
+  final bool faceDetectedInFrame;
+
   FaceMatchResult(
     this.name,
     this.id,
     this.similarity,
     this.liveness, {
     this.matchImagePath,
+    this.faceDetectedInFrame = false,
   });
 }
 
@@ -178,6 +186,16 @@ class FacesTracker extends ChangeNotifier {
   }
 
   void reset() {
+    if (_state == FaceTrackerState.notInitialized) {
+      // The worker isolate is only spawned lazily, on the first call to
+      // [process] (see below). Forcing _state to waitingForImage here before
+      // that happens would skip _initialize() entirely -- the isolate would
+      // never be spawned, so no frame is ever processed again for the rest
+      // of the test (QR detection and face matching both silently stop
+      // working). Let the first [process] call take the normal
+      // notInitialized -> initializing -> _initialize() path instead.
+      return;
+    }
     _tracker.clear();
     _setTrackerParameters();
     _onStateChange(FaceTrackerState.waitingForImage);
@@ -362,6 +380,13 @@ class FacesTracker extends ChangeNotifier {
     return _ids.map((id) => FaceWrapper(id, _tracker)).toList(growable: false);
   }
 
+  /// Whether the last frame fed to [feedFrame] (in the worker isolate)
+  /// actually contained a detectable face, regardless of whether it matches
+  /// the reference image. [_ids] is populated straight from the native
+  /// tracker's per-frame detection, so it stays empty on an empty/no-face
+  /// frame even when match reporting is otherwise permissive.
+  bool get hasFaceInFrame => _ids.isNotEmpty;
+
   void resetTracker() {
     _tracker.clear();
     _setTrackerParameters();
@@ -407,10 +432,11 @@ class FacesTracker extends ChangeNotifier {
         similarity,
         liveness,
         matchImagePath: await _getTemporaryFilePath(),
+        faceDetectedInFrame: true,
       );
     }
 
-    return FaceMatchResult("", -1, 0.0, 0.0);
+    return FaceMatchResult("", -1, 0.0, 0.0, faceDetectedInFrame: hasFaceInFrame);
   }
 
   void next() {

@@ -232,11 +232,14 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     try {
       return await _tracker.matchFace(img);
     } on FSDK.FaceNotFoundError {
-      return FaceMatchResult("", -1, 0, 0);
+      return FaceMatchResult("", -1, 0, 0, faceDetectedInFrame: false);
     }
   }
 
   void reset() {
+    if (!_trackerInitialized) {
+      return;
+    }
     _tracker.reset();
   }
 
