@@ -86,6 +86,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   Object? _initError;
   bool _trackerInitialized = false;
   CameraImage? _lastCameraImage;
+  BarcodeScanner? _barcodeScanner;
 
   @override
   void initState() {
@@ -261,13 +262,16 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       return null;
     }
 
-    final barcodeScanner = BarcodeScanner(formats: [BarcodeFormat.qrCode]);
-    try {
-      final barcodes = await barcodeScanner.processImage(inputImage);
-      return barcodes.isEmpty ? null : barcodes.first.rawValue;
-    } finally {
-      await barcodeScanner.close();
-    }
+    // Reused across calls: creating a new BarcodeScanner per frame forces
+    // ML Kit to reload its dynamite module and rebuild the TFLite XNNPack
+    // delegate every time (visible in logcat as repeated "Replacing N out of
+    // N node(s) with delegate" lines), which was the actual source of the
+    // per-frame lag causing liveness detection to time out.
+    final scanner = _barcodeScanner ??= BarcodeScanner(
+      formats: [BarcodeFormat.qrCode],
+    );
+    final barcodes = await scanner.processImage(inputImage);
+    return barcodes.isEmpty ? null : barcodes.first.rawValue;
   }
 
   InputImage? _buildBarcodeInputImage() {
@@ -276,8 +280,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       return null;
     }
 
-    final InputImageRotation rotation =
-        InputImageRotationValue.fromRawValue(
+    final InputImageRotation rotation = InputImageRotationValue.fromRawValue(
           _controller.description.sensorOrientation,
         ) ??
         InputImageRotation.rotation0deg;
@@ -477,6 +480,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     _tracker.removeListener(_onTrackerUpdate);
     _tracker.dispose();
     _controller.dispose();
+    _barcodeScanner?.close();
 
     super.dispose();
   }
