@@ -35,9 +35,19 @@ class _WorkerData {
   final int orientation;
   final bool frontFacing;
   final bool enableSaveFrame;
+  final int frameId;
 
-  _WorkerData(
-      this.image, this.orientation, this.frontFacing, this.enableSaveFrame);
+  _WorkerData(this.image, this.orientation, this.frontFacing,
+      this.enableSaveFrame, this.frameId);
+}
+
+/// Sent back by the worker once [Tracker.feedFrame] has actually run for
+/// [frameId], so the main isolate knows precisely which frame the native
+/// tracker's state (used by [FacesTracker.matchFace]) now reflects.
+class _WorkerResult {
+  final int frameId;
+
+  _WorkerResult(this.frameId);
 }
 
 class FaceWrapper {
@@ -152,6 +162,22 @@ class FacesTracker extends ChangeNotifier {
   int _lastOrientation = 0;
   bool _lastFrontFacing = false;
 
+  /// Identifies which frame is currently held in [_fsdkImage], and which
+  /// frame the native tracker's state (as read by [matchFace]) actually
+  /// reflects. Incremented on every [process] call, echoed back by the
+  /// worker in [_WorkerResult] once [Tracker.feedFrame] has run for it.
+  ///
+  /// A newer camera frame can arrive and overwrite [_fsdkImage] while a match
+  /// triggered by an older frame is still being resolved (matching runs
+  /// asynchronously against the reference face, see
+  /// [FaceRecognitionPreviewState._onTrackerUpdate]). Comparing these two ids
+  /// lets [saveCurrentFrame] detect that drift instead of silently saving a
+  /// frame that was never the one matched -- e.g. the user's hand now in
+  /// front of their face while moving the device towards the QR reader.
+  int _frameId = 0;
+  int? _fsdkImageFrameId;
+  int? _lastFedFrameId;
+
   late final _tracker = Tracker();
   final _receive = ReceivePort();
   final _converter = ImageConverter();
@@ -228,14 +254,17 @@ class FacesTracker extends ChangeNotifier {
         return;
       }
 
-      if (!_enableSaveFrame) {
-        _state = FaceTrackerState.waitingForImage;
-        return;
-      }
+      // [feedFrame] has now run for this frame in the worker: the native
+      // tracker's state (read by [matchFace]) reflects it, so it's only now
+      // safe to notify listeners and let [_onTrackerUpdate] match against it.
+      final result = msg as _WorkerResult;
+      _lastFedFrameId = result.frameId;
 
-      final imageToSave = _fsdkImage;
-      _fsdkImage = null;
-      imageToSave?.free();
+      if (_enableSaveFrame) {
+        final imageToSave = _fsdkImage;
+        _fsdkImage = null;
+        imageToSave?.free();
+      }
       _onStateChange(FaceTrackerState.idsReady);
     });
 
@@ -275,7 +304,7 @@ class FacesTracker extends ChangeNotifier {
       }
 
       image.free();
-      sendPort.send(null);
+      sendPort.send(_WorkerResult(wData.frameId));
     });
 
     sendPort.send(receivePort.sendPort);
@@ -301,9 +330,21 @@ class FacesTracker extends ChangeNotifier {
   /// continuously on. Used to fetch a face image once, right when a match is
   /// confirmed, instead of writing to disk on every processed frame (which
   /// causes camera freezes).
+  ///
+  /// Returns null if [_fsdkImage] no longer matches the frame the tracker
+  /// actually matched (see [_fsdkImageFrameId]/[_lastFedFrameId]) -- saving it
+  /// anyway would silently hand back a frame that was never the one checked,
+  /// e.g. one grabbed while the user's hand was still moving the device.
   Future<File?> saveCurrentFrame() {
     final image = _fsdkImage;
     if (image == null) {
+      return Future.value(null);
+    }
+    if (_fsdkImageFrameId != _lastFedFrameId) {
+      print(
+        'Discarding stale frame for capture: held frame $_fsdkImageFrameId, '
+        'tracker matched against frame $_lastFedFrameId',
+      );
       return Future.value(null);
     }
     // The frame kept in memory is the raw converted image: unlike the copy
@@ -351,12 +392,21 @@ class FacesTracker extends ChangeNotifier {
     }
     _lastProcessAt = now;
 
-    _onStateChange(FaceTrackerState.waitingForIds);
+    // Note: [_state] is only flipped to [waitingForIds] here, without a call
+    // to [_onStateChange] (so without notifying listeners yet). Notifying
+    // now would let [_onTrackerUpdate] call [matchFace] before [feedFrame]
+    // has run for this frame in the worker isolate, matching against the
+    // native tracker's *previous* state instead. Listeners are notified once
+    // the worker echoes back that this frame was actually fed (see
+    // [_initialize]'s receive-port handler).
+    _state = FaceTrackerState.waitingForIds;
     try {
       final frameImage = _converter.convert(image);
       final workerImage = frameImage.copy();
+      final frameId = ++_frameId;
       _fsdkImage?.free();
       _fsdkImage = frameImage;
+      _fsdkImageFrameId = frameId;
       _lastOrientation = orientation;
       _lastFrontFacing = frontFacing;
       _send.send(
@@ -365,6 +415,7 @@ class FacesTracker extends ChangeNotifier {
           orientation,
           frontFacing,
           _enableSaveFrame,
+          frameId,
         ),
       );
     } catch (e) {
