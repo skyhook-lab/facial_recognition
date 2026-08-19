@@ -88,6 +88,19 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   CameraImage? _lastCameraImage;
   BarcodeScanner? _barcodeScanner;
 
+  /// Set as soon as [dispose] starts. `initialize()` runs several `await`s
+  /// (user face load, camera open, image stream start) and this State can be
+  /// disposed while any of them is pending -- e.g. the warm-up page gets
+  /// hidden and re-shown within a second or two on a device status/error
+  /// flicker (see WarmUpPageContent/DevicePage). Without this guard,
+  /// `initialize()` resumes after dispose and creates/starts a brand new
+  /// `CameraController` on a State that no longer exists, which is the
+  /// source of the `Disposed CameraController` and `No supported surface
+  /// combination` crashes seen in Crashlytics (a stray controller keeps
+  /// trying to bind use cases while a fresh one from the next mount does the
+  /// same).
+  bool _disposed = false;
+
   @override
   void initState() {
     super.initState();
@@ -110,7 +123,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_controller.value.isInitialized) {
+    if (!_trackerInitialized || !_controller.value.isInitialized) {
       return;
     }
 
@@ -130,6 +143,9 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       debugPrint('Camera is already opening, skipping initialization.');
       return;
     }
+    if (_disposed) {
+      return;
+    }
     if (mounted) {
       setState(() {
         _isInitializing = true;
@@ -140,6 +156,9 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     try {
       await initializeLuxand(widget.licenseKey);
       debugPrint('[Face] <Init> Luxand library initialized.');
+      if (_disposed) {
+        return;
+      }
       if (!_trackerInitialized) {
         _tracker = FacesTracker(similarityThreshold: 0.01);
         _tracker.enableSaveFrame = widget.enableSaveFrame;
@@ -158,15 +177,37 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
 
       await _initUserFace();
       debugPrint('[Face] <Init> User face loaded.');
+      if (_disposed) {
+        return;
+      }
 
       await _closeCamera();
+      if (_disposed) {
+        // The widget was disposed while the previous controller was being
+        // closed. Do not create/start a new one on top of it.
+        return;
+      }
       _controller = _getCameraController();
       await _controller.initialize();
+      if (_disposed) {
+        // Disposed while opening the camera: close what we just opened
+        // instead of leaving it dangling and starting an image stream on a
+        // controller nobody will ever dispose.
+        await _closeCamera();
+        return;
+      }
       await _controller.startImageStream(_process);
+      if (_disposed) {
+        await _closeCamera();
+        return;
+      }
       debugPrint('[Face] <Init> Camera initialized and image stream started.');
 
       widget.onInitialized?.call();
     } catch (e, s) {
+      if (_disposed) {
+        return;
+      }
       if (e is FSDK.FaceNotFoundError) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
@@ -462,7 +503,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   }
 
   Future<void> _closeCamera() async {
-    if (!_controller.value.isInitialized) {
+    if (!_trackerInitialized || !_controller.value.isInitialized) {
       return;
     }
 
@@ -475,11 +516,21 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
 
   @override
   void dispose() {
+    // Must be set before anything else: it's checked by `initialize()` after
+    // every `await` to stop it from touching `_controller` once this State
+    // is gone (see the field doc on `_disposed`).
+    _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
 
-    _tracker.removeListener(_onTrackerUpdate);
-    _tracker.dispose();
-    _controller.dispose();
+    if (_trackerInitialized) {
+      _tracker.removeListener(_onTrackerUpdate);
+      _tracker.dispose();
+      // Best-effort synchronous dispose to release the camera as soon as
+      // possible. This races with any in-flight `initialize()` call, which
+      // is why `initialize()` itself re-checks `_disposed` after every await
+      // and closes/skips accordingly instead of relying solely on this.
+      _controller.dispose();
+    }
     _barcodeScanner?.close();
 
     super.dispose();
