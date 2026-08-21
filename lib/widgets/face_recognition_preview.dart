@@ -88,6 +88,24 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   CameraImage? _lastCameraImage;
   BarcodeScanner? _barcodeScanner;
 
+  /// Whether [_controller] currently points at a live, initialized camera
+  /// session that is safe to build a [CameraPreview] from.
+  ///
+  /// Tracked separately from `_controller.value.isInitialized`: that value
+  /// lags behind the actual dispose (see [_closeCamera]), so a rebuild
+  /// landing in that gap -- e.g. triggered by a `MediaQuery` change when the
+  /// Android notification shade is dragged down and released quickly --
+  /// could still read `isInitialized == true` and build a `CameraPreview` on
+  /// a controller that is already disposed, throwing
+  /// "buildPreview() was called on a disposed CameraController". This flag
+  /// flips false synchronously the instant a close starts.
+  bool _controllerReady = false;
+
+  /// The in-flight close operation, if any, so overlapping calls (e.g. the
+  /// app going `inactive` while `initialize()` is already mid-flight) await
+  /// the same dispose instead of racing to close/dispose [_controller] twice.
+  Future<void>? _closingFuture;
+
   @override
   void initState() {
     super.initState();
@@ -164,6 +182,13 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       await _controller.initialize();
       await _controller.startImageStream(_process);
       debugPrint('[Face] <Init> Camera initialized and image stream started.');
+      if (mounted) {
+        setState(() {
+          _controllerReady = true;
+        });
+      } else {
+        _controllerReady = true;
+      }
 
       widget.onInitialized?.call();
     } catch (e, s) {
@@ -392,7 +417,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
       return _buildInitError();
     }
 
-    if (_isInitializing || !_controller.value.isInitialized) {
+    if (_isInitializing || !_controllerReady) {
       return _buildProgress();
     }
     return Stack(
@@ -467,7 +492,25 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     );
   }
 
-  Future<void> _closeCamera() async {
+  Future<void> _closeCamera() {
+    return _closingFuture ??= _doCloseCamera().whenComplete(() {
+      _closingFuture = null;
+    });
+  }
+
+  Future<void> _doCloseCamera() async {
+    // Flip this before the first `await` below so a rebuild racing this close
+    // (e.g. from a lifecycle-triggered `MediaQuery` change) never sees a
+    // stale `isInitialized == true` and tries to build a preview from the
+    // controller we are about to dispose.
+    if (mounted) {
+      setState(() {
+        _controllerReady = false;
+      });
+    } else {
+      _controllerReady = false;
+    }
+
     if (!_controller.value.isInitialized) {
       return;
     }
