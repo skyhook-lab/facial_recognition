@@ -474,13 +474,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   CameraController _getCameraController() {
     return CameraController(
       _getCamera(),
-      // Preview + ImageCapture + ImageAnalysis are always bound together by
-      // the CameraX Android implementation, even though this widget never
-      // calls takePicture(). On LEGACY/LIMITED hardware-level cameras that
-      // 3-way combination isn't supported at ResolutionPreset.high (1280x720),
-      // which throws "No supported surface combination is found" on
-      // bindToLifecycle. Using a smaller size class avoids that.
-      ResolutionPreset.medium,
+      ResolutionPreset.high,
       enableAudio: false,
     );
   }
