@@ -77,6 +77,17 @@ class FaceRecognitionPreview extends StatefulWidget {
 
 class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     with WidgetsBindingObserver {
+  /// Number of preview States ever created in this process.
+  ///
+  /// Static on purpose: the camera failures we are chasing ("No supported
+  /// surface combination", "Unable to open camera") are suspected to come from
+  /// two *different* State instances overlapping -- one still tearing its
+  /// camera session down while the next one binds a new set of use cases. A
+  /// per-instance flag cannot see that, so every lifecycle log below carries
+  /// [_instanceId] to make the interleaving visible in the exported logs.
+  static int _instanceCount = 0;
+  final int _instanceId = ++_instanceCount;
+
   late final FacesTracker _tracker;
   late FacesPainter _painter;
   late CameraController _controller;
@@ -110,6 +121,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   void initState() {
     super.initState();
 
+    debugPrint('[CAM][#$_instanceId] initState');
     WidgetsBinding.instance.addObserver(this);
 
     initialize();
@@ -144,8 +156,12 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   }
 
   Future<void> initialize() async {
+    debugPrint('[CAM][#$_instanceId] initialize() called');
     if (_isInitializing) {
-      debugPrint('Camera is already opening, skipping initialization.');
+      debugPrint(
+        '[CAM][#$_instanceId] Camera is already opening, skipping '
+        'initialization.',
+      );
       return;
     }
     if (mounted) {
@@ -179,9 +195,14 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
 
       await _closeCamera();
       _controller = _getCameraController();
+      debugPrint('[CAM][#$_instanceId] binding camera use cases...');
       await _controller.initialize();
+      debugPrint('[CAM][#$_instanceId] camera bound, starting image stream');
       await _controller.startImageStream(_process);
-      debugPrint('[Face] <Init> Camera initialized and image stream started.');
+      debugPrint(
+        '[CAM][#$_instanceId] [Face] <Init> Camera initialized and image '
+        'stream started.',
+      );
       if (mounted) {
         setState(() {
           _controllerReady = true;
@@ -203,7 +224,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
         return;
       }
 
-      debugPrint('[Face] <Init> Error during initialization: $e\n$s');
+      debugPrint('[CAM][#$_instanceId] BIND FAILED: $e\n$s');
       _initError = e;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -493,6 +514,7 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   }
 
   Future<void> _doCloseCamera() async {
+    debugPrint('[CAM][#$_instanceId] closing camera (start)');
     // Flip this before the first `await` below so a rebuild racing this close
     // (e.g. from a lifecycle-triggered `MediaQuery` change) never sees a
     // stale `isInitialized == true` and tries to build a preview from the
@@ -514,10 +536,12 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     }
 
     await _controller.dispose();
+    debugPrint('[CAM][#$_instanceId] closing camera (done)');
   }
 
   @override
   void dispose() {
+    debugPrint('[CAM][#$_instanceId] dispose');
     WidgetsBinding.instance.removeObserver(this);
 
     _tracker.removeListener(_onTrackerUpdate);
