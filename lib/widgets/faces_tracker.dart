@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
@@ -20,14 +21,35 @@ import 'package:flutter_face_sdk/flutter_face_sdk.dart' as FSDK;
 import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
 import 'package:path_provider/path_provider.dart';
 
+/// Bootstrap payload for the worker isolate.
+///
+/// Deliberately carries no tracker/buffer handle: those only exist once a
+/// licence has been activated and a camera session opened, whereas the
+/// expensive part of starting the worker (initialising the background binary
+/// messenger and loading the native library into the new isolate) does not
+/// depend on them at all. Measured at ~7s on device, which is why the worker
+/// is started once at app launch and handed its handles later, via
+/// [_WorkerSession].
 class _FacesTrackerIsolateInfo {
   final SendPort port;
-  final int trackerHandle;
-  final BufferInfo idsBufferInfo;
   final RootIsolateToken rootIsolateToken;
 
-  _FacesTrackerIsolateInfo(
-      this.port, this.trackerHandle, this.idsBufferInfo, this.rootIsolateToken);
+  _FacesTrackerIsolateInfo(this.port, this.rootIsolateToken);
+}
+
+/// Binds the long-lived worker to one camera session's native objects.
+///
+/// Sent every time a [FacesTracker] initialises. [sessionId] is echoed back on
+/// every result so late frames from a previous session can be discarded
+/// instead of being fed to a tracker that has since been freed -- these
+/// handles are raw pointers (see `Tracker.fromHandle`), so using a stale one
+/// is a segfault, not an exception.
+class _WorkerSession {
+  final int sessionId;
+  final int trackerHandle;
+  final BufferInfo idsBufferInfo;
+
+  _WorkerSession(this.sessionId, this.trackerHandle, this.idsBufferInfo);
 }
 
 class _WorkerData {
@@ -36,9 +58,10 @@ class _WorkerData {
   final bool frontFacing;
   final bool enableSaveFrame;
   final int frameId;
+  final int sessionId;
 
   _WorkerData(this.image, this.orientation, this.frontFacing,
-      this.enableSaveFrame, this.frameId);
+      this.enableSaveFrame, this.frameId, this.sessionId);
 }
 
 /// Sent back by the worker once [Tracker.feedFrame] has actually run for
@@ -46,8 +69,9 @@ class _WorkerData {
 /// tracker's state (used by [FacesTracker.matchFace]) now reflects.
 class _WorkerResult {
   final int frameId;
+  final int sessionId;
 
-  _WorkerResult(this.frameId);
+  _WorkerResult(this.frameId, this.sessionId);
 }
 
 class FaceWrapper {
@@ -114,6 +138,198 @@ enum FaceTrackerState {
   idsReady
 }
 
+/// TEMPORARY INSTRUMENTATION: prints with a wall-clock timestamp, so tracker
+/// state transitions can be lined up against the [FLOW]/[QRPERF] logs when
+/// read straight from logcat. Remove with those logs.
+void _tsPrint(String message) {
+  final DateTime now = DateTime.now();
+  String two(int n) => n.toString().padLeft(2, '0');
+  String three(int n) => n.toString().padLeft(3, '0');
+  final String stamp = '${two(now.hour)}:${two(now.minute)}:'
+      '${two(now.second)}.${three(now.millisecond)}';
+  // ignore: avoid_print
+  print('$stamp $message');
+}
+
+/// Owns the single face-tracking worker isolate for the whole app.
+///
+/// Starting that isolate costs ~7s on device (background binary messenger +
+/// native library load), and it used to be paid lazily on the first camera
+/// frame of every preview -- so the user waited through it on the QR screen,
+/// during onboarding and on the Luxand auth screen alike. It is started once
+/// here instead, ideally at app launch (see [FaceWorker.start]), and kept
+/// alive until the process dies.
+///
+/// The isolate holds no per-session state of its own: each [FacesTracker]
+/// binds it to its own native tracker via [bindSession], and results are
+/// tagged with that session id so anything left in flight from a previous
+/// preview is dropped rather than applied to the new one.
+class FaceWorker {
+  FaceWorker._();
+
+  static final FaceWorker instance = FaceWorker._();
+
+  /// Kept so the isolate is never garbage-collected for the life of the app.
+  /// Deliberately never killed: the whole point of this class is that the
+  /// worker outlives every individual camera session.
+  // ignore: unused_field
+  Isolate? _isolate;
+  SendPort? _send;
+  final ReceivePort _receive = ReceivePort();
+
+  /// Completes once the worker has answered with its [SendPort].
+  Completer<void>? _ready;
+
+  int _sessionCounter = 0;
+  int _currentSessionId = 0;
+
+  /// Called with (frameId) for results belonging to the current session.
+  void Function(int frameId)? _onFrameProcessed;
+
+  /// Whether the worker has been started (it may still be booting).
+  bool get isStarted => _ready != null;
+
+  /// Boots the worker. Safe to call more than once: later calls return the
+  /// same future. Call this as early as possible -- it needs nothing but a
+  /// [RootIsolateToken], so it does not have to wait for a licence, a camera
+  /// or a signed-in user.
+  Future<void> start() {
+    final Completer<void>? existing = _ready;
+    if (existing != null) {
+      return existing.future;
+    }
+    final Completer<void> ready = Completer<void>();
+    _ready = ready;
+
+    _receive.listen((Object? msg) {
+      if (msg is SendPort) {
+        _send = msg;
+        _tsPrint('[TRACK] worker isolate ready (app-wide)');
+        if (!ready.isCompleted) {
+          ready.complete();
+        }
+        return;
+      }
+      final _WorkerResult result = msg as _WorkerResult;
+      // Late frame from a preview that has already gone away: its native
+      // tracker may well have been freed, so nothing may act on it.
+      if (result.sessionId != _currentSessionId) {
+        return;
+      }
+      _onFrameProcessed?.call(result.frameId);
+    });
+
+    _tsPrint('[TRACK] spawning worker isolate (app-wide)...');
+    Isolate.spawn(
+      _worker,
+      _FacesTrackerIsolateInfo(_receive.sendPort, RootIsolateToken.instance!),
+    ).then((Isolate isolate) {
+      _isolate = isolate;
+    }).catchError((Object e) {
+      _tsPrint('[TRACK] worker spawn failed: $e');
+      if (!ready.isCompleted) {
+        ready.completeError(e);
+      }
+    });
+
+    return ready.future;
+  }
+
+  /// Binds the worker to one camera session's native objects and returns that
+  /// session's id. Any result still in flight for an earlier session is
+  /// discarded from here on.
+  Future<int> bindSession({
+    required int trackerHandle,
+    required BufferInfo idsBufferInfo,
+    required void Function(int frameId) onFrameProcessed,
+  }) async {
+    await start();
+    final int sessionId = ++_sessionCounter;
+    _currentSessionId = sessionId;
+    _onFrameProcessed = onFrameProcessed;
+    _send!.send(_WorkerSession(sessionId, trackerHandle, idsBufferInfo));
+    _tsPrint('[TRACK] worker bound to session $sessionId');
+    return sessionId;
+  }
+
+  /// Detaches the current session without stopping the worker, so a preview
+  /// being disposed cannot leave a callback pointing at dead state.
+  void releaseSession(int sessionId) {
+    if (_currentSessionId != sessionId) {
+      return;
+    }
+    _onFrameProcessed = null;
+    _currentSessionId = 0;
+  }
+
+  /// Sends one frame for processing. Ignored when the worker is not ready or
+  /// the session has moved on.
+  void feed(_WorkerData data) {
+    if (_send == null || data.sessionId != _currentSessionId) {
+      return;
+    }
+    _send!.send(data);
+  }
+
+  static void _worker(_FacesTrackerIsolateInfo info) async {
+    BackgroundIsolateBinaryMessenger.ensureInitialized(info.rootIsolateToken);
+
+    final SendPort sendPort = info.port;
+    final ReceivePort receivePort = ReceivePort();
+
+    // Bound by the first _WorkerSession message and rebound on every later
+    // one, so the isolate outlives any individual camera session.
+    Tracker? tracker;
+    Int64Buffer? ids;
+    int boundSession = 0;
+
+    receivePort.listen((Object? data) async {
+      if (data is _WorkerSession) {
+        tracker = Tracker.fromHandle(data.trackerHandle);
+        ids = Int64Buffer.fromInfo(data.idsBufferInfo);
+        boundSession = data.sessionId;
+        return;
+      }
+
+      final _WorkerData wData = data as _WorkerData;
+      final Tracker? boundTracker = tracker;
+      final Int64Buffer? boundIds = ids;
+      // Not bound yet, or a frame from a session this isolate has since been
+      // rebound away from. Its handles may already be freed, and these are
+      // raw pointers, so touching them would be a segfault rather than an
+      // exception: drop the frame and free just the image we were handed.
+      if (boundTracker == null ||
+          boundIds == null ||
+          wData.sessionId != boundSession) {
+        Image.fromHandle(wData.image).free();
+        return;
+      }
+
+      Image image = Image.fromHandle(wData.image);
+      image = FacesTracker._normalizeImage(
+        image,
+        wData.orientation,
+        wData.frontFacing,
+      );
+
+      boundIds.length = 0;
+      try {
+        boundTracker.feedFrame(0, image, ids: boundIds);
+        if (wData.enableSaveFrame && boundIds.isNotEmpty) {
+          await FacesTracker.saveFaceToFile(image);
+        }
+      } on FaceNotFoundError {
+        /*No faces were found*/
+      }
+
+      image.free();
+      sendPort.send(_WorkerResult(wData.frameId, wData.sessionId));
+    });
+
+    sendPort.send(receivePort.sendPort);
+  }
+}
+
 class FaceMatchResult {
   final String name;
   final int id;
@@ -145,19 +361,33 @@ class FacesTracker extends ChangeNotifier {
   bool _enableSaveFrame = true;
   DateTime? _lastProcessAt;
 
+  /// TEMPORARY INSTRUMENTATION: how many camera frames were dropped because
+  /// the tracker was not in `waitingForImage` (remove with the [TRACK] logs).
+  int _framesSkipped = 0;
+
+  /// TEMPORARY INSTRUMENTATION: how many frames were skipped while waiting for
+  /// the worker to confirm the frame held for capture (remove with the [TRACK]
+  /// logs).
+  int _framesHeldForCapture = 0;
+
+  /// When the current frame started being held for the worker, so the wait
+  /// can be bounded instead of stalling detection forever.
+  DateTime? _heldFrameSince;
+
   set enableSaveFrame(bool enable) {
     _enableSaveFrame = enable;
   }
 
   void _onStateChange(FaceTrackerState newState) {
+    if (newState != _state) {
+      _tsPrint('[TRACK] state: ${_state.name} -> ${newState.name}');
+    }
     _state = newState;
     if (hasListeners) {
       notifyListeners();
     }
   }
 
-  late SendPort _send;
-  Isolate? _isolate;
   Image? _fsdkImage;
   int _lastOrientation = 0;
   bool _lastFrontFacing = false;
@@ -179,9 +409,18 @@ class FacesTracker extends ChangeNotifier {
   int? _lastFedFrameId;
 
   late final _tracker = Tracker();
-  final _receive = ReceivePort();
   final _converter = ImageConverter();
   final _ids = Int64Buffer.allocate(5);
+
+  /// This tracker's slot in the shared [FaceWorker]. Frames and results are
+  /// tagged with it, so a frame still in flight when a preview goes away can
+  /// never be fed to a native tracker that has since been freed.
+  int _sessionId = 0;
+  bool _disposed = false;
+
+  /// TEMPORARY INSTRUMENTATION: when each frame was handed to the worker, to
+  /// measure the round-trip (remove with the [TRACK] logs).
+  final Map<int, DateTime> _frameSentAt = <int, DateTime>{};
 
   int get width => _converter.width;
   int get height => _converter.height;
@@ -194,31 +433,27 @@ class FacesTracker extends ChangeNotifier {
 
   @override
   void dispose() {
-    _isolate?.kill(priority: Isolate.immediate);
+    // The worker isolate is shared and app-wide now (see [FaceWorker]), so it
+    // deliberately outlives this tracker instead of being killed here. Only
+    // this tracker's session is released, which stops any in-flight frame
+    // from reaching the native objects freed just below.
+    _disposed = true;
+    FaceWorker.instance.releaseSession(_sessionId);
+    _referenceTemplate?.free();
+    _referenceTemplate = null;
     _converter.free();
     _tracker.free();
     super.dispose();
   }
 
-  Future<void> _initTracker() async {
-    // Remove old saved image if exists
-    final tempDir = await _getTemporaryFilePath();
-    final tempFile = File(tempDir);
-    if (await tempFile.exists()) {
-      await tempFile.delete();
-      debugPrint('Deleted old temporary face image at $tempDir');
-    }
-    _setTrackerParameters();
-  }
-
   void reset() {
     if (_state == FaceTrackerState.notInitialized) {
-      // The worker isolate is only spawned lazily, on the first call to
+      // This tracker binds to the shared worker lazily, on the first call to
       // [process] (see below). Forcing _state to waitingForImage here before
-      // that happens would skip _initialize() entirely -- the isolate would
-      // never be spawned, so no frame is ever processed again for the rest
-      // of the test (QR detection and face matching both silently stop
-      // working). Let the first [process] call take the normal
+      // that happens would skip _initialize() entirely -- no session would
+      // ever be bound, so no frame is ever processed again for the rest of
+      // the test (QR detection and face matching both silently stop working).
+      // Let the first [process] call take the normal
       // notInitialized -> initializing -> _initialize() path instead.
       return;
     }
@@ -244,70 +479,65 @@ class FacesTracker extends ChangeNotifier {
     });
   }
 
-  void _initialize() async {
-    await _initTracker();
-
-    _receive.listen((msg) async {
-      if (msg is SendPort) {
-        _send = msg;
-        _state = FaceTrackerState.waitingForImage;
-        return;
-      }
-
-      // [feedFrame] has now run for this frame in the worker: the native
-      // tracker's state (read by [matchFace]) reflects it, so it's only now
-      // safe to notify listeners and let [_onTrackerUpdate] match against it.
-      final result = msg as _WorkerResult;
-      _lastFedFrameId = result.frameId;
-
-      if (_enableSaveFrame) {
-        final imageToSave = _fsdkImage;
-        _fsdkImage = null;
-        imageToSave?.free();
-      }
-      _onStateChange(FaceTrackerState.idsReady);
-    });
-
-    _isolate = await Isolate.spawn(
-      _worker,
-      _FacesTrackerIsolateInfo(
-        _receive.sendPort,
-        _tracker.handle,
-        _ids.getInfo(),
-        RootIsolateToken.instance!,
-      ),
-    );
+  Future<void> _initTracker() async {
+    // Remove old saved image if exists
+    final tempDir = await _getTemporaryFilePath();
+    final tempFile = File(tempDir);
+    if (await tempFile.exists()) {
+      await tempFile.delete();
+      debugPrint('Deleted old temporary face image at $tempDir');
+    }
+    _setTrackerParameters();
   }
 
-  static void _worker(_FacesTrackerIsolateInfo info) async {
-    BackgroundIsolateBinaryMessenger.ensureInitialized(info.rootIsolateToken);
+  void _initialize() async {
+    _tsPrint('[TRACK] _initialize() started');
+    await _initTracker();
+    _tsPrint('[TRACK] _initTracker() done (params set, temp file cleaned)');
 
-    final sendPort = info.port;
-    final tracker = Tracker.fromHandle(info.trackerHandle);
-    final ids = Int64Buffer.fromInfo(info.idsBufferInfo);
+    // Binding is near-instant when the worker was started at app launch; it
+    // only falls back to paying the ~7s boot cost here if it was not.
+    final int sessionId = await FaceWorker.instance.bindSession(
+      trackerHandle: _tracker.handle,
+      idsBufferInfo: _ids.getInfo(),
+      onFrameProcessed: _onFrameProcessed,
+    );
+    if (_disposed) {
+      // Disposed while the worker was still booting: hand the session back so
+      // no result is ever routed to this now-dead tracker.
+      FaceWorker.instance.releaseSession(sessionId);
+      return;
+    }
+    _sessionId = sessionId;
+    _tsPrint('[TRACK] worker bound -> waitingForImage');
+    _onStateChange(FaceTrackerState.waitingForImage);
+  }
 
-    final receivePort = ReceivePort();
-    receivePort.listen((data) async {
-      _WorkerData wData = data as _WorkerData;
-      Image image = Image.fromHandle(wData.image);
-
-      image = _normalizeImage(image, wData.orientation, wData.frontFacing);
-
-      ids.length = 0;
-      try {
-        tracker.feedFrame(0, image, ids: ids);
-        if (wData.enableSaveFrame && ids.isNotEmpty) {
-          await saveFaceToFile(image);
-        }
-      } on FaceNotFoundError {
-        /*No faces were found*/
+  /// Called by [FaceWorker] once `feedFrame` has actually run for [frameId]:
+  /// the native tracker's state (read by [matchFace]) reflects it, so it is
+  /// only now safe to notify listeners and let `_onTrackerUpdate` match
+  /// against it.
+  void _onFrameProcessed(int frameId) {
+    if (_disposed) {
+      return;
+    }
+    // TEMPORARY INSTRUMENTATION (remove with the [TRACK] logs): how long the
+    // worker took to feed this frame to the native tracker.
+    final DateTime? sentAt = _frameSentAt.remove(frameId);
+    if (sentAt != null) {
+      final int rtt = DateTime.now().difference(sentAt).inMilliseconds;
+      if (rtt > 120) {
+        _tsPrint('[TRACK] worker round-trip slow: ${rtt}ms (frame $frameId)');
       }
+    }
+    _lastFedFrameId = frameId;
 
-      image.free();
-      sendPort.send(_WorkerResult(wData.frameId));
-    });
-
-    sendPort.send(receivePort.sendPort);
+    if (_enableSaveFrame) {
+      final imageToSave = _fsdkImage;
+      _fsdkImage = null;
+      imageToSave?.free();
+    }
+    _onStateChange(FaceTrackerState.idsReady);
   }
 
   static Image _normalizeImage(Image image, int orientation, bool frontFacing) {
@@ -382,6 +612,13 @@ class FacesTracker extends ChangeNotifier {
     }
 
     if (_state != FaceTrackerState.waitingForImage) {
+      _framesSkipped++;
+      if (_framesSkipped % 20 == 1) {
+        _tsPrint(
+          '[TRACK] frame skipped (state=${_state.name}, '
+          'skipped=$_framesSkipped)',
+        );
+      }
       return;
     }
 
@@ -390,6 +627,47 @@ class FacesTracker extends ChangeNotifier {
         now.difference(_lastProcessAt!) < const Duration(milliseconds: 500)) {
       return;
     }
+
+    // Hold the frame currently kept for capture until the worker has actually
+    // fed it to the native tracker.
+    //
+    // [saveCurrentFrame] refuses to save a frame the tracker never matched
+    // against (it compares these two ids), and the worker round-trip was
+    // measured at 150-660ms while frames are accepted every 500ms. So the
+    // held frame was permanently one ahead of the matched one, every capture
+    // failed its freshness check, and every face match was then dropped by
+    // the caller -- the test ended with "your face was not detected" despite
+    // the face being recognised on five consecutive cycles.
+    //
+    // Skipping here costs nothing: those frames were being captured and
+    // thrown away anyway, and it paces intake to what the worker can absorb.
+    if (_fsdkImageFrameId != null && _fsdkImageFrameId != _lastFedFrameId) {
+      // Bounded wait: a result can legitimately never arrive (the session was
+      // rebound, the worker dropped the frame), and blocking on it forever
+      // would freeze detection for the rest of the test. Past this delay the
+      // frame is replaced as before -- back to the old behaviour rather than
+      // a stall.
+      final DateTime? heldSince = _heldFrameSince;
+      if (heldSince != null &&
+          now.difference(heldSince) > const Duration(seconds: 2)) {
+        _tsPrint(
+          '[TRACK] frame hold timed out (frame $_fsdkImageFrameId never '
+          'confirmed, last fed $_lastFedFrameId) -- releasing',
+        );
+        _heldFrameSince = null;
+      } else {
+        _heldFrameSince ??= now;
+        _framesHeldForCapture++;
+        if (_framesHeldForCapture % 20 == 1) {
+          _tsPrint(
+            '[TRACK] frame held (awaiting worker for frame $_fsdkImageFrameId, '
+            'last fed $_lastFedFrameId, held=$_framesHeldForCapture)',
+          );
+        }
+        return;
+      }
+    }
+    _heldFrameSince = null;
     _lastProcessAt = now;
 
     // Note: [_state] is only flipped to [waitingForIds] here, without a call
@@ -401,21 +679,33 @@ class FacesTracker extends ChangeNotifier {
     // [_initialize]'s receive-port handler).
     _state = FaceTrackerState.waitingForIds;
     try {
+      // TEMPORARY INSTRUMENTATION (remove with the [TRACK] logs): convert()
+      // and copy() both run on the UI thread for every frame fed to the
+      // worker.
+      final Stopwatch swConvert = Stopwatch()..start();
       final frameImage = _converter.convert(image);
       final workerImage = frameImage.copy();
+      swConvert.stop();
+      if (swConvert.elapsedMilliseconds > 30) {
+        _tsPrint(
+          '[TRACK] frame convert+copy slow: ${swConvert.elapsedMilliseconds}ms',
+        );
+      }
       final frameId = ++_frameId;
       _fsdkImage?.free();
       _fsdkImage = frameImage;
       _fsdkImageFrameId = frameId;
       _lastOrientation = orientation;
       _lastFrontFacing = frontFacing;
-      _send.send(
+      _frameSentAt[frameId] = DateTime.now();
+      FaceWorker.instance.feed(
         _WorkerData(
           workerImage.handle,
           orientation,
           frontFacing,
           _enableSaveFrame,
           frameId,
+          _sessionId,
         ),
       );
     } catch (e) {
@@ -462,13 +752,57 @@ class FacesTracker extends ChangeNotifier {
     return true;
   }
 
-  Future<FaceMatchResult> matchFace(Image img) async {
-    FSDK.FaceTemplate faceTemplate = FSDK.GetFaceTemplate(img);
+  /// Cached template of the reference image passed to [matchFace].
+  ///
+  /// [img] is the *reference* photo (the registered employee's picture, see
+  /// `FaceRecognitionPreviewState._userFace`), not the camera frame -- the
+  /// camera frames go to the native tracker through [process]/`feedFrame`,
+  /// and `matchFaces` compares this template against what the tracker has
+  /// seen. That reference never changes during a test, yet `GetFaceTemplate`
+  /// was being run on it for every single frame: measured at ~300ms each
+  /// time, on the UI thread, which starved the tracker of frames (match
+  /// cycles were ~1s apart, so it kept losing tracking and re-detecting).
+  /// Computed once here and reused; [clearReferenceTemplate] drops it when
+  /// the reference image itself changes.
+  FSDK.FaceTemplate? _referenceTemplate;
+  int? _referenceTemplateFor;
 
+  /// Drops the cached reference template, so the next [matchFace] recomputes
+  /// it. Call when the reference image is reloaded.
+  void clearReferenceTemplate() {
+    _referenceTemplate?.free();
+    _referenceTemplate = null;
+    _referenceTemplateFor = null;
+  }
+
+  Future<FaceMatchResult> matchFace(Image img) async {
+    // Recompute only when the reference image actually changed (its native
+    // handle identifies it): otherwise reuse the cached template.
+    if (_referenceTemplate == null || _referenceTemplateFor != img.handle) {
+      final Stopwatch swTemplate = Stopwatch()..start();
+      _referenceTemplate?.free();
+      _referenceTemplate = FSDK.GetFaceTemplate(img);
+      _referenceTemplateFor = img.handle;
+      swTemplate.stop();
+      _tsPrint(
+        '[TRACK] reference template computed in '
+        '${swTemplate.elapsedMilliseconds}ms (cached from now on)',
+      );
+    }
+    final FSDK.FaceTemplate faceTemplate = _referenceTemplate!;
+
+    final Stopwatch swMatch = Stopwatch()..start();
     var similarityResults = _tracker.matchFaces(
       faceTemplate,
       similarityThreshold,
     );
+    swMatch.stop();
+    if (swMatch.elapsedMilliseconds > 40) {
+      _tsPrint(
+        '[TRACK] matchFace slow: matchFaces=${swMatch.elapsedMilliseconds}ms '
+        'results=${similarityResults.length}',
+      );
+    }
 
     if (similarityResults.isNotEmpty) {
       final id = similarityResults[0].id;

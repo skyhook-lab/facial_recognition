@@ -9,6 +9,20 @@ import 'package:flutter_face_sdk/widgets/faces_painter.dart';
 import 'package:flutter_face_sdk/widgets/faces_tracker.dart';
 import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
 
+/// TEMPORARY INSTRUMENTATION: prints with a wall-clock timestamp.
+///
+/// The in-app log export (`AppLogEntry.format`) already stamps every line, but
+/// these are read straight from logcat during perf work, where Flutter's own
+/// `I/flutter` lines carry no time of their own.
+void _tsPrint(String message) {
+  final DateTime now = DateTime.now();
+  String two(int n) => n.toString().padLeft(2, '0');
+  String three(int n) => n.toString().padLeft(3, '0');
+  final String stamp = '${two(now.hour)}:${two(now.minute)}:'
+      '${two(now.second)}.${three(now.millisecond)}';
+  print('$stamp $message');
+}
+
 const luxandURL = 'https://www.luxand.com/facesdk';
 const luxandSwatch = MaterialColor(0xff5a95dd, <int, Color>{
   50: Color(0xffa4c4ec),
@@ -50,6 +64,11 @@ class FaceRecognitionPreview extends StatefulWidget {
   final bool displayDebugInfo;
   final double similarityThreshold;
 
+  /// Whether to scan camera frames for a QR code. Independent of the face
+  /// checks: scanning starts with the first camera frame, without waiting for
+  /// the tracker to come up.
+  final bool scanQrCode;
+
   /// Whether a match with similarity 0 (no reference match found by the
   /// native tracker) should still be reported to [onMatchResult] instead of
   /// being silently dropped. Set this when the caller does not require the
@@ -67,6 +86,7 @@ class FaceRecognitionPreview extends StatefulWidget {
     this.enabled = true,
     this.displayDebugInfo = false,
     this.reportUnmatchedFaces = false,
+    this.scanQrCode = false,
     this.onInitialized,
     super.key,
   });
@@ -98,6 +118,31 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   bool _trackerInitialized = false;
   CameraImage? _lastCameraImage;
   BarcodeScanner? _barcodeScanner;
+
+  /// Minimum delay between two QR scans. ML Kit inference costs 80-900ms on
+  /// device, so scanning every frame would queue work faster than it drains.
+  static const Duration _qrScanInterval = Duration(milliseconds: 400);
+
+  /// Whether a self-driven QR scan is currently running.
+  bool _qrScanInFlight = false;
+  DateTime? _lastQrScanStartedAt;
+
+  /// Code read by the most recent completed scan, or null when that scan
+  /// found none. Read by the host widget on its own cycle.
+  String? lastQrCode;
+
+  /// TEMPORARY INSTRUMENTATION: how many tracker notifications were dropped
+  /// before the tracker was ready, and whether the first real match cycle has
+  /// been logged (remove with the [TRACK] logs).
+  int _trackerUpdatesBlocked = 0;
+  bool _firstMatchCycleLogged = false;
+  DateTime? _lastMatchCycleAt;
+
+  /// TEMPORARY INSTRUMENTATION: timestamps used by the [QRPERF] logs to
+  /// report the real interval between QR scans and between camera frames
+  /// (remove together with those logs).
+  DateTime? _lastQrScanAt;
+  DateTime? _lastFrameAt;
 
   /// Whether [_controller] currently points at a live, initialized camera
   /// session that is safe to build a [CameraPreview] from.
@@ -244,6 +289,10 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   Future<void> _initUserFace() async {
     final XFile image = XFile(widget.userFacePath);
     _userFace = FSDK.Image.fromFile(image.path);
+    // A fresh reference image invalidates the template cached from the
+    // previous one (this runs again on every initialize(), e.g. when the app
+    // comes back to the foreground).
+    _tracker.clearReferenceTemplate();
     await _tracker.findFace(_userFace);
   }
 
@@ -265,9 +314,48 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     }
     if (![FaceTrackerState.idsReady, FaceTrackerState.waitingForIds]
         .contains(_trackerState)) {
+      // TEMPORARY INSTRUMENTATION (remove with the [TRACK] logs): this is the
+      // gate that kept the QR result from being consumed for ~8s.
+      _trackerUpdatesBlocked++;
+      if (_trackerUpdatesBlocked % 10 == 1) {
+        _tsPrint(
+          '[TRACK] onTrackerUpdate blocked (state=${_trackerState.name}, '
+          'count=$_trackerUpdatesBlocked)',
+        );
+      }
       return;
     }
+    if (!_firstMatchCycleLogged) {
+      _firstMatchCycleLogged = true;
+      _tsPrint('[TRACK] FIRST match cycle running (state=${_trackerState.name})');
+    }
+    // TEMPORARY INSTRUMENTATION (remove with the [TRACK] logs): the interval
+    // between match cycles is what the native tracker actually gets to work
+    // with -- ContinuousVideoFeed needs a steady stream, and a choppy one
+    // makes it lose tracking and re-detect the face from scratch.
+    final DateTime cycleNow = DateTime.now();
+    final int sinceLastCycle = _lastMatchCycleAt == null
+        ? 0
+        : cycleNow.difference(_lastMatchCycleAt!).inMilliseconds;
+    _lastMatchCycleAt = cycleNow;
+
+    final Stopwatch swFind = Stopwatch()..start();
     final FaceMatchResult match = await _findMatch(_userFace);
+    swFind.stop();
+
+    // `scanQrCode` is only set during the QR phase, so its absence marks the
+    // facial phase from inside the SDK, which does not know about the app's
+    // EnabledFeatures enum.
+    if (!widget.scanQrCode) {
+      _tsPrint(
+        '[TRACK] face cycle: gap=${sinceLastCycle}ms '
+        'findMatch=${swFind.elapsedMilliseconds}ms '
+        'similarity=${match.similarity.toStringAsFixed(3)} '
+        'faceInFrame=${match.faceDetectedInFrame} '
+        'liveness=${match.liveness.toStringAsFixed(3)}',
+      );
+    }
+
     if (match.similarity <= 0 && !widget.reportUnmatchedFaces) {
       debugPrint('No match found for the reference face.');
       return;
@@ -303,8 +391,18 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
   /// frame) without the camera freezes that continuous `enableSaveFrame`
   /// caused.
   Future<String?> detectQrCode() async {
+    // TEMPORARY INSTRUMENTATION (remove once the QR-phase stutter is
+    // diagnosed): times the two halves of a scan separately, so we can tell
+    // whether the cost is the Dart-side frame conversion (runs on the UI
+    // thread) or the ML Kit inference behind the platform channel.
+    final Stopwatch swTotal = Stopwatch()..start();
+
+    final Stopwatch swConvert = Stopwatch()..start();
     final InputImage? inputImage = _buildBarcodeInputImage();
+    swConvert.stop();
+
     if (inputImage == null) {
+      _tsPrint('[QRPERF] no frame available (convert took ${swConvert.elapsedMicroseconds}us)');
       return null;
     }
 
@@ -316,7 +414,28 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     final scanner = _barcodeScanner ??= BarcodeScanner(
       formats: [BarcodeFormat.qrCode],
     );
+
+    final Stopwatch swScan = Stopwatch()..start();
     final barcodes = await scanner.processImage(inputImage);
+    swScan.stop();
+    swTotal.stop();
+
+    final CameraImage? frame = _lastCameraImage;
+    final Duration sinceLast = _lastQrScanAt == null
+        ? Duration.zero
+        : DateTime.now().difference(_lastQrScanAt!);
+    _lastQrScanAt = DateTime.now();
+
+    _tsPrint(
+      '[QRPERF] convert=${swConvert.elapsedMilliseconds}ms '
+      'mlkit=${swScan.elapsedMilliseconds}ms '
+      'total=${swTotal.elapsedMilliseconds}ms '
+      'gapSinceLastScan=${sinceLast.inMilliseconds}ms '
+      'size=${frame?.width}x${frame?.height} '
+      'format=${frame?.format.group} '
+      'found=${barcodes.isNotEmpty}',
+    );
+
     return barcodes.isEmpty ? null : barcodes.first.rawValue;
   }
 
@@ -423,8 +542,66 @@ class FaceRecognitionPreviewState extends State<FaceRecognitionPreview>
     return nv21;
   }
 
+  /// Runs a QR scan straight off the camera stream, independently of the face
+  /// tracker's own cycle.
+  ///
+  /// The scan used to be driven from [_onTrackerUpdate], which only starts
+  /// emitting once the native tracker reaches `idsReady`/`waitingForIds`.
+  /// That took ~9s from camera start in production logs, and during all that
+  /// time no QR scan was attempted at all -- the code was on screen, ML Kit
+  /// was warm, and nothing was looking at it. Nothing about reading a QR code
+  /// needs a face, so it is driven from the raw frame callback instead, which
+  /// runs from the very first frame.
+  ///
+  /// Results land in [lastQrCode] for the host widget to consume on its next
+  /// match cycle, exactly as before -- this changes when scanning starts, not
+  /// how a result is reported.
+  void _maybeScanQrCode() {
+    if (!widget.enabled || !widget.scanQrCode || _qrScanInFlight) {
+      return;
+    }
+    final DateTime now = DateTime.now();
+    if (_lastQrScanStartedAt != null &&
+        now.difference(_lastQrScanStartedAt!) < _qrScanInterval) {
+      return;
+    }
+    _lastQrScanStartedAt = now;
+    _qrScanInFlight = true;
+    unawaited(
+      detectQrCode()
+          .then<void>((String? code) {
+            if (mounted) {
+              if (code != null && lastQrCode == null) {
+                _tsPrint('[TRACK] QR code READ by preview: $code');
+              }
+              lastQrCode = code;
+            }
+          })
+          .catchError((Object e) {
+            debugPrint('[CAM][#$_instanceId] QR scan failed: $e');
+          })
+          .whenComplete(() => _qrScanInFlight = false),
+    );
+  }
+
   void _process(CameraImage image) {
     _lastCameraImage = image;
+    _maybeScanQrCode();
+
+    // TEMPORARY INSTRUMENTATION (remove with the [QRPERF] logs): the camera
+    // delivers frames at a steady rate, so the interval between calls here is
+    // a direct measure of the stutter -- a spike means the UI thread was
+    // blocked and frames were dropped. Only slow frames are logged, to avoid
+    // the logging itself becoming the bottleneck.
+    final DateTime now = DateTime.now();
+    if (_lastFrameAt != null) {
+      final int gap = now.difference(_lastFrameAt!).inMilliseconds;
+      if (gap > 120) {
+        _tsPrint('[QRPERF] slow frame: ${gap}ms since previous camera frame');
+      }
+    }
+    _lastFrameAt = now;
+
     _tracker.process(
       image,
       _controller.description.sensorOrientation,
