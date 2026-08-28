@@ -308,34 +308,47 @@ class FaceWorker {
       // rebound away from: the tracker it was meant for may already be freed,
       // and that is a raw pointer, so touching it would be a segfault rather
       // than an exception. Nothing to release -- the frame is still bytes.
-      if (boundTracker == null ||
-          boundIds == null ||
-          wData.sessionId != boundSession) {
-        return;
-      }
+      final bool usable = boundTracker != null &&
+          boundIds != null &&
+          wData.sessionId == boundSession;
 
-      // Conversion now happens here instead of on the UI thread. The
-      // converter recycles its buffers between frames, so it is built once
-      // per isolate and lives as long as the worker.
-      converter ??= ImageConverter();
-      Image image = converter!.convertPlanes(wData.planeBytes, wData.imageInfo);
-      image = FacesTracker._normalizeImage(
-        image,
-        wData.orientation,
-        wData.frontFacing,
-      );
+      if (usable) {
+        // An uncaught throw here kills the isolate silently: no result is
+        // ever sent back, the tracker stays in waitingForIds forever and
+        // detection stops dead (observed in production: the QR code was read
+        // but no match cycle ever ran again). Report and carry on instead.
+        try {
+          // Conversion happens here rather than on the UI thread. The
+          // converter recycles its buffers between frames, so it is built
+          // once per isolate and lives as long as the worker.
+          converter ??= ImageConverter();
+          Image image =
+              converter!.convertPlanes(wData.planeBytes, wData.imageInfo);
+          image = FacesTracker._normalizeImage(
+            image,
+            wData.orientation,
+            wData.frontFacing,
+          );
 
-      boundIds.length = 0;
-      try {
-        boundTracker.feedFrame(0, image, ids: boundIds);
-        if (wData.enableSaveFrame && boundIds.isNotEmpty) {
-          await FacesTracker.saveFaceToFile(image);
+          boundIds.length = 0;
+          try {
+            boundTracker.feedFrame(0, image, ids: boundIds);
+            if (wData.enableSaveFrame && boundIds.isNotEmpty) {
+              await FacesTracker.saveFaceToFile(image);
+            }
+          } on FaceNotFoundError {
+            /*No faces were found*/
+          }
+
+          image.free();
+        } catch (e, st) {
+          _tsPrint('[TRACK] WORKER ERROR: $e\n$st');
         }
-      } on FaceNotFoundError {
-        /*No faces were found*/
       }
 
-      image.free();
+      // Always answer, even when the frame was unusable or failed: the main
+      // isolate paces frames on this reply (see the capture hold in
+      // [process]), so staying silent stalls it permanently.
       sendPort.send(_WorkerResult(wData.frameId, wData.sessionId));
     });
 
