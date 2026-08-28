@@ -64,6 +64,13 @@ class FacesPainter extends CustomPainter {
       height = _tracker.height;
     }
 
+    // No frame seen yet: nothing to scale against, and dividing by zero here
+    // would poison every offset below with infinity.
+    if (width <= 0 || height <= 0) {
+      _tracker.next();
+      return;
+    }
+
     final wc = size.width / width;
     final hc = size.height / height;
 

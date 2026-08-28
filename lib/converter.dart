@@ -1,4 +1,5 @@
 import 'dart:ffi';
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 
@@ -85,6 +86,65 @@ class ImageConverter {
   static void _planeToBuffer(Plane plane, DataBuffer buffer) {
     final pointerList = buffer.pointer.asTypedList(plane.bytes.length);
     pointerList.setAll(0, plane.bytes);
+  }
+
+  /// Converts raw plane bytes into an FSDK image, reusing this converter's
+  /// buffers.
+  ///
+  /// Split out of [convert] so a frame can be snapshotted cheaply (a byte
+  /// copy) and only converted when it is actually needed -- see
+  /// `FacesTracker.saveCurrentFrame`, which uses one frame per test.
+  Image convertPlanes(List<Uint8List> planeBytes, ImageInfo info) {
+    if (info != _info) {
+      free();
+
+      _buffer = DataBuffer.allocate(info.width * info.height * 3);
+      _planes =
+          planeBytes.map((bytes) => DataBuffer.allocate(bytes.length)).toList();
+
+      _info = info;
+    }
+
+    for (int i = 0; i < _planes.length; ++i) {
+      final pointerList = _planes[i].pointer.asTypedList(planeBytes[i].length);
+      pointerList.setAll(0, planeBytes[i]);
+    }
+
+    switch (_info.imageFormatGroup) {
+      case ImageFormatGroup.unknown:
+        throw ArgumentError('Unknown image format');
+      case ImageFormatGroup.yuv420:
+        _yuv420ToRGB(
+          _planes[0].pointer,
+          _planes[1].pointer,
+          _planes[2].pointer,
+          _info.width,
+          _info.height,
+          _info.bytesPerPixel,
+          _info.bytesPerRow,
+          _buffer.pointer,
+        );
+        break;
+      case ImageFormatGroup.bgra8888:
+        _bgraToRGB(
+          _planes[0].pointer,
+          _info.width,
+          _info.height,
+          _info.bytesPerRow,
+          _buffer.pointer,
+        );
+        break;
+      default:
+        throw ArgumentError('Unsupported image format');
+    }
+
+    return Image.fromBuffer(
+      _buffer,
+      _info.width,
+      _info.height,
+      _info.width * 3,
+      ImageMode.Color24bit,
+    );
   }
 
   Image convert(CameraImage image) {

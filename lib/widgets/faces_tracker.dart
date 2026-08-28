@@ -1,11 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
-import 'package:flutter/material.dart' hide Image;
+import 'package:flutter/material.dart' hide Image, ImageInfo;
 import 'package:flutter/services.dart';
-import 'package:flutter_face_sdk/converter.dart' show ImageConverter;
+import 'package:flutter_face_sdk/converter.dart' show ImageConverter, ImageInfo;
 import 'package:flutter_face_sdk/flutter_face_sdk.dart'
     show
         BufferInfo,
@@ -52,16 +53,24 @@ class _WorkerSession {
   _WorkerSession(this.sessionId, this.trackerHandle, this.idsBufferInfo);
 }
 
+/// One camera frame on its way to the worker.
+///
+/// Carries the raw planes rather than a converted image handle: the
+/// YUV420->RGB pass over ~920k pixels costs ~170ms and used to run on the UI
+/// thread for every frame. Typed lists are copied across the isolate
+/// boundary, so no native pointer is shared -- which also removes this path
+/// as a source of use-after-free.
 class _WorkerData {
-  final int image;
+  final List<Uint8List> planeBytes;
+  final ImageInfo imageInfo;
   final int orientation;
   final bool frontFacing;
   final bool enableSaveFrame;
   final int frameId;
   final int sessionId;
 
-  _WorkerData(this.image, this.orientation, this.frontFacing,
-      this.enableSaveFrame, this.frameId, this.sessionId);
+  _WorkerData(this.planeBytes, this.imageInfo, this.orientation,
+      this.frontFacing, this.enableSaveFrame, this.frameId, this.sessionId);
 }
 
 /// Sent back by the worker once [Tracker.feedFrame] has actually run for
@@ -282,6 +291,7 @@ class FaceWorker {
     Tracker? tracker;
     Int64Buffer? ids;
     int boundSession = 0;
+    ImageConverter? converter;
 
     receivePort.listen((Object? data) async {
       if (data is _WorkerSession) {
@@ -295,17 +305,20 @@ class FaceWorker {
       final Tracker? boundTracker = tracker;
       final Int64Buffer? boundIds = ids;
       // Not bound yet, or a frame from a session this isolate has since been
-      // rebound away from. Its handles may already be freed, and these are
-      // raw pointers, so touching them would be a segfault rather than an
-      // exception: drop the frame and free just the image we were handed.
+      // rebound away from: the tracker it was meant for may already be freed,
+      // and that is a raw pointer, so touching it would be a segfault rather
+      // than an exception. Nothing to release -- the frame is still bytes.
       if (boundTracker == null ||
           boundIds == null ||
           wData.sessionId != boundSession) {
-        Image.fromHandle(wData.image).free();
         return;
       }
 
-      Image image = Image.fromHandle(wData.image);
+      // Conversion now happens here instead of on the UI thread. The
+      // converter recycles its buffers between frames, so it is built once
+      // per isolate and lives as long as the worker.
+      converter ??= ImageConverter();
+      Image image = converter!.convertPlanes(wData.planeBytes, wData.imageInfo);
       image = FacesTracker._normalizeImage(
         image,
         wData.orientation,
@@ -388,7 +401,11 @@ class FacesTracker extends ChangeNotifier {
     }
   }
 
-  Image? _fsdkImage;
+  /// Raw planes of the frame currently kept for capture, plus the info needed
+  /// to convert them. Held instead of a converted [Image]: converting every
+  /// frame cost ~250ms on the UI thread for a picture used once per test.
+  List<Uint8List>? _heldPlanes;
+  ImageInfo? _heldPlanesInfo;
   int _lastOrientation = 0;
   bool _lastFrontFacing = false;
 
@@ -422,8 +439,11 @@ class FacesTracker extends ChangeNotifier {
   /// measure the round-trip (remove with the [TRACK] logs).
   final Map<int, DateTime> _frameSentAt = <int, DateTime>{};
 
-  int get width => _converter.width;
-  int get height => _converter.height;
+  // Sourced from the last frame's info rather than from [_converter], which
+  // no longer converts anything on this side (the worker does). The painter
+  // divides by these to scale face rectangles, so they must never be -1.
+  int get width => _heldPlanesInfo?.width ?? 0;
+  int get height => _heldPlanesInfo?.height ?? 0;
 
   double similarityThreshold;
 
@@ -533,9 +553,10 @@ class FacesTracker extends ChangeNotifier {
     _lastFedFrameId = frameId;
 
     if (_enableSaveFrame) {
-      final imageToSave = _fsdkImage;
-      _fsdkImage = null;
-      imageToSave?.free();
+      // Nothing native to release here any more: what is held between frames
+      // is a plain byte snapshot, reclaimed by the GC when replaced.
+      _heldPlanes = null;
+      _heldPlanesInfo = null;
     }
     _onStateChange(FaceTrackerState.idsReady);
   }
@@ -566,8 +587,9 @@ class FacesTracker extends ChangeNotifier {
   /// anyway would silently hand back a frame that was never the one checked,
   /// e.g. one grabbed while the user's hand was still moving the device.
   Future<File?> saveCurrentFrame() {
-    final image = _fsdkImage;
-    if (image == null) {
+    final List<Uint8List>? planes = _heldPlanes;
+    final ImageInfo? info = _heldPlanesInfo;
+    if (planes == null || info == null) {
       return Future.value(null);
     }
     if (_fsdkImageFrameId != _lastFedFrameId) {
@@ -577,13 +599,28 @@ class FacesTracker extends ChangeNotifier {
       );
       return Future.value(null);
     }
-    // The frame kept in memory is the raw converted image: unlike the copy
-    // sent to the worker isolate, it was never rotated/mirrored for the
-    // camera's orientation, so it must go through the same normalization
-    // before being saved, otherwise the saved photo comes out rotated.
-    final normalized = _normalizeImage(image, _lastOrientation, _lastFrontFacing);
-    _fsdkImage = normalized;
-    return saveFaceToFile(normalized);
+    // Converted here rather than on every frame: this runs once per test, at
+    // the moment a match is confirmed.
+    //
+    // A dedicated converter is used on purpose -- [_converter] recycles its
+    // internal buffer for the next camera frame, so the image it returns
+    // would be overwritten under our feet before the save completes.
+    final ImageConverter captureConverter = ImageConverter();
+    try {
+      final Image image = captureConverter.convertPlanes(planes, info);
+      // The frame kept in memory is the raw converted image: unlike the one
+      // sent to the worker isolate, it was never rotated/mirrored for the
+      // camera's orientation, so it must go through the same normalization
+      // before being saved, otherwise the saved photo comes out rotated.
+      final normalized = _normalizeImage(
+        image,
+        _lastOrientation,
+        _lastFrontFacing,
+      );
+      return saveFaceToFile(normalized);
+    } finally {
+      captureConverter.free();
+    }
   }
 
   static Future<File?> saveFaceToFile(Image img) async {
@@ -679,28 +716,33 @@ class FacesTracker extends ChangeNotifier {
     // [_initialize]'s receive-port handler).
     _state = FaceTrackerState.waitingForIds;
     try {
-      // TEMPORARY INSTRUMENTATION (remove with the [TRACK] logs): convert()
-      // and copy() both run on the UI thread for every frame fed to the
-      // worker.
-      final Stopwatch swConvert = Stopwatch()..start();
-      final frameImage = _converter.convert(image);
-      final workerImage = frameImage.copy();
-      swConvert.stop();
-      if (swConvert.elapsedMilliseconds > 30) {
+      // Nothing is converted here any more: the UI thread only snapshots the
+      // raw planes (a few ms). The worker converts its own copy, and
+      // [saveCurrentFrame] converts on demand from the same snapshot -- once
+      // per test rather than once per frame.
+      final Stopwatch swPlanes = Stopwatch()..start();
+      final List<Uint8List> planeBytes = image.planes
+          .map((Plane plane) => Uint8List.fromList(plane.bytes))
+          .toList(growable: false);
+      final ImageInfo frameInfo = ImageInfo.forImage(image);
+      swPlanes.stop();
+
+      if (swPlanes.elapsedMilliseconds > 30) {
         _tsPrint(
-          '[TRACK] frame convert+copy slow: ${swConvert.elapsedMilliseconds}ms',
+          '[TRACK] frame prep slow: planes=${swPlanes.elapsedMilliseconds}ms',
         );
       }
       final frameId = ++_frameId;
-      _fsdkImage?.free();
-      _fsdkImage = frameImage;
+      _heldPlanes = planeBytes;
+      _heldPlanesInfo = frameInfo;
       _fsdkImageFrameId = frameId;
       _lastOrientation = orientation;
       _lastFrontFacing = frontFacing;
       _frameSentAt[frameId] = DateTime.now();
       FaceWorker.instance.feed(
         _WorkerData(
-          workerImage.handle,
+          planeBytes,
+          frameInfo,
           orientation,
           frontFacing,
           _enableSaveFrame,
