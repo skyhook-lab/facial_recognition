@@ -11,7 +11,7 @@ import 'package:flutter_face_sdk/flutter_face_sdk.dart'
     show
         BufferInfo,
         Error,
-        FacePosition,
+        Face,
         FaceNotFoundError,
         FacialFeatures,
         Image,
@@ -88,7 +88,7 @@ class FaceWrapper {
   final Tracker _tracker;
 
   String? _name;
-  FacePosition? _position;
+  Face? _face;
   FacialFeatures? _features;
 
   double? _liveness;
@@ -107,9 +107,9 @@ class FaceWrapper {
     return _name!;
   }
 
-  FacePosition get position {
-    _position ??= _tracker.getFacePosition(0, _id);
-    return _position!;
+  Face get face {
+    _face ??= _tracker.getFace(0, _id);
+    return _face!;
   }
 
   FacialFeatures get features {
@@ -496,13 +496,9 @@ class FacesTracker extends ChangeNotifier {
   }
 
   void _setTrackerParameters() {
-    _tracker.setMultipleParameters({
-      'ContinuousVideoFeed': true,
-      'HandleArbitraryRotations': false,
-      'DetermineFaceRotationAngle': false,
-      'InternalResizeWidth': 256,
-      'FaceDetectionThreshold': 5
-    });
+    // FaceDetectionThreshold is left to the SDK default: since FaceSDK 9 it
+    // is a float score (default 0.4), the former value 5 is rejected.
+    _tracker.setMultipleParameters({'ContinuousVideoFeed': true});
 
     // Setting liveness detection parameters
     _tracker.setMultipleParameters({

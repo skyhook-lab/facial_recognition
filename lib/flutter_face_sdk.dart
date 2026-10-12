@@ -541,151 +541,6 @@ class Int64Buffer extends ListBase<int> implements Freeable {
   }
 }
 
-class _FacePosition extends Struct {
-  @Int32()
-  external int xc;
-
-  @Int32()
-  external int yc;
-
-  @Int32()
-  external int w;
-
-  @Int32()
-  external int padding;
-
-  @Double()
-  external double angle;
-}
-
-class FacePosition extends Freeable {
-  final _NativePointer<_FacePosition> _nativePointer;
-
-  Pointer<_FacePosition> get pointer => _nativePointer.pointer;
-
-  int get xc => pointer.ref.xc;
-  int get yc => pointer.ref.yc;
-  int get w => pointer.ref.w;
-
-  set xc(int value) => pointer.ref.xc = value;
-  set yc(int value) => pointer.ref.yc = value;
-  set w(int value) => pointer.ref.w = value;
-
-  double get angle => pointer.ref.angle;
-  set angle(double value) => pointer.ref.angle = value;
-
-  FacePosition(this._nativePointer);
-
-  factory FacePosition.allocate() {
-    return FacePosition(
-        _AutoNativePointer<_FacePosition>.allocate(sizeOf<_FacePosition>()));
-  }
-
-  factory FacePosition._allocate() {
-    return FacePosition.allocate();
-  }
-
-  factory FacePosition.fromPointer(Pointer<_FacePosition> pointer) {
-    return FacePosition(_NativePointer<_FacePosition>(pointer));
-  }
-
-  @override
-  void free() {
-    _nativePointer.free();
-  }
-}
-
-class FacePositions extends ListBase<FacePosition> implements Freeable {
-  late int _capacity;
-  late _NativePointer<Int32> _length;
-  late _NativePointer<_FacePosition> _nativeData;
-
-  FacePositions.allocate(int length) {
-    _capacity = length;
-    _length = _AutoNativePointer<Int32>.allocate(sizeOf<Int32>())
-      ..pointer.value = length;
-    _nativeData = _AutoNativePointer<_FacePosition>.allocate(
-        sizeOf<_FacePosition>() * length);
-  }
-
-  factory FacePositions._allocate(int length) {
-    return FacePositions.allocate(length);
-  }
-
-  FacePositions.fromPointers(
-      Pointer<_FacePosition> nativeData, Pointer<Int32> length) {
-    _length = _NativePointer<Int32>(length);
-    _nativeData = _NativePointer<_FacePosition>(nativeData);
-    _capacity = this.length;
-  }
-
-  FacePositions.fromAddresses(int nativeDataAddress, int lengthAddress) {
-    _length = _NativePointer<Int32>.fromAddress(lengthAddress);
-    _nativeData = _NativePointer<_FacePosition>.fromAddress(nativeDataAddress);
-    _capacity = length;
-  }
-
-  factory FacePositions.fromInfo(BufferInfo info) {
-    return FacePositions.fromAddresses(info._dataAddress, info._lengthAddress);
-  }
-
-  int get capacity => _capacity;
-  @override
-  int get length => _length.pointer.value;
-  Pointer<_FacePosition> get pointer => _nativeData.pointer;
-  Pointer<Int32> get _lengthPointer => _length.pointer;
-
-  @override
-  set length(int newLength) {
-    if (newLength <= _capacity) {
-      _length.pointer.value = newLength;
-      return;
-    }
-
-    if (!_nativeData._owner) {
-      throw UnsupportedError("Cannot reallocate non owned pointers");
-    }
-
-    final newNativeData = _AutoNativePointer<_FacePosition>.allocate(
-        sizeOf<_FacePosition>() * newLength);
-    for (int i = 0; i < min(length, newLength); ++i) {
-      _assign(newNativeData.pointer[i], _nativeData.pointer[i]);
-    }
-
-    _nativeData.free();
-
-    _nativeData = newNativeData;
-    _length.pointer.value = newLength;
-    _capacity = newLength;
-  }
-
-  void _assign(_FacePosition a, _FacePosition b) {
-    a.xc = b.xc;
-    a.yc = b.yc;
-    a.w = b.w;
-    a.padding = b.padding;
-    a.angle = b.angle;
-  }
-
-  @override
-  FacePosition operator [](int index) =>
-      FacePosition.fromPointer(pointer.elementAt(index));
-
-  @override
-  void operator []=(int index, FacePosition pos) =>
-      _assign(_nativeData.pointer[index], pos.pointer.ref);
-
-  BufferInfo getInfo() {
-    return BufferInfo(_nativeData.pointer.address, _length.pointer.address);
-  }
-
-  @override
-  void free() {
-    _length.free();
-    _nativeData.free();
-  }
-}
-
 class Point extends Struct {
   @Int32()
   external int x;
@@ -701,45 +556,201 @@ class Point extends Struct {
   }
 }
 
-class FeaturePoints extends Struct {
-  @Array(5)
-  external Array<Point> points;
+/// Mirrors `TPointf`: facial feature coordinates are floats since FaceSDK 9.
+class Pointf extends Struct {
+  @Float()
+  external double x;
+
+  @Float()
+  external double y;
 }
 
 class BBox extends Struct {
   external Point p0, p1;
 }
 
+/// Mirrors `TFace`, which replaces `TFacePosition` since FaceSDK 9.
+class _Face extends Struct {
+  @Float()
+  external double score;
+
+  @Float()
+  external double angle;
+
+  external BBox bbox;
+
+  @Array(5)
+  external Array<Point> features;
+}
+
+const FaceFeatureCount = 5;
+
+class Face extends Freeable {
+  final _NativePointer<_Face> _nativePointer;
+
+  Pointer<_Face> get pointer => _nativePointer.pointer;
+
+  double get score => pointer.ref.score;
+  double get angle => pointer.ref.angle;
+
+  /// Top-left corner of the face bounding box.
+  Point get p0 => pointer.ref.bbox.p0;
+
+  /// Bottom-right corner of the face bounding box.
+  Point get p1 => pointer.ref.bbox.p1;
+
+  /// The 5 main facial points (eyes, nose tip, mouth corners).
+  Point feature(int index) => pointer.ref.features[index];
+
+  Face(this._nativePointer);
+
+  factory Face.allocate() {
+    return Face(_AutoNativePointer<_Face>.allocate(sizeOf<_Face>()));
+  }
+
+  factory Face._allocate() {
+    return Face.allocate();
+  }
+
+  factory Face.fromPointer(Pointer<_Face> pointer) {
+    return Face(_NativePointer<_Face>(pointer));
+  }
+
+  @override
+  void free() {
+    _nativePointer.free();
+  }
+}
+
+class Faces extends ListBase<Face> implements Freeable {
+  late int _capacity;
+  late _NativePointer<Int32> _length;
+  late _NativePointer<_Face> _nativeData;
+
+  Faces.allocate(int length) {
+    _capacity = length;
+    _length = _AutoNativePointer<Int32>.allocate(sizeOf<Int32>())
+      ..pointer.value = length;
+    _nativeData =
+        _AutoNativePointer<_Face>.allocate(sizeOf<_Face>() * length);
+  }
+
+  factory Faces._allocate(int length) {
+    return Faces.allocate(length);
+  }
+
+  Faces.fromPointers(Pointer<_Face> nativeData, Pointer<Int32> length) {
+    _length = _NativePointer<Int32>(length);
+    _nativeData = _NativePointer<_Face>(nativeData);
+    _capacity = this.length;
+  }
+
+  Faces.fromAddresses(int nativeDataAddress, int lengthAddress) {
+    _length = _NativePointer<Int32>.fromAddress(lengthAddress);
+    _nativeData = _NativePointer<_Face>.fromAddress(nativeDataAddress);
+    _capacity = length;
+  }
+
+  factory Faces.fromInfo(BufferInfo info) {
+    return Faces.fromAddresses(info._dataAddress, info._lengthAddress);
+  }
+
+  int get capacity => _capacity;
+  @override
+  int get length => _length.pointer.value;
+  Pointer<_Face> get pointer => _nativeData.pointer;
+  Pointer<Int32> get _lengthPointer => _length.pointer;
+
+  @override
+  set length(int newLength) {
+    if (newLength <= _capacity) {
+      _length.pointer.value = newLength;
+      return;
+    }
+
+    if (!_nativeData._owner) {
+      throw UnsupportedError("Cannot reallocate non owned pointers");
+    }
+
+    final newNativeData =
+        _AutoNativePointer<_Face>.allocate(sizeOf<_Face>() * newLength);
+    for (int i = 0; i < min(length, newLength); ++i) {
+      _assign(newNativeData.pointer[i], _nativeData.pointer[i]);
+    }
+
+    _nativeData.free();
+
+    _nativeData = newNativeData;
+    _length.pointer.value = newLength;
+    _capacity = newLength;
+  }
+
+  void _assign(_Face a, _Face b) {
+    a.score = b.score;
+    a.angle = b.angle;
+    a.bbox.p0.x = b.bbox.p0.x;
+    a.bbox.p0.y = b.bbox.p0.y;
+    a.bbox.p1.x = b.bbox.p1.x;
+    a.bbox.p1.y = b.bbox.p1.y;
+    for (int i = 0; i < FaceFeatureCount; ++i) {
+      a.features[i].x = b.features[i].x;
+      a.features[i].y = b.features[i].y;
+    }
+  }
+
+  @override
+  Face operator [](int index) => Face.fromPointer(pointer.elementAt(index));
+
+  @override
+  void operator []=(int index, Face face) =>
+      _assign(_nativeData.pointer[index], face.pointer.ref);
+
+  BufferInfo getInfo() {
+    return BufferInfo(_nativeData.pointer.address, _length.pointer.address);
+  }
+
+  @override
+  void free() {
+    _length.free();
+    _nativeData.free();
+  }
+}
+
+/// View on the first two points of a [FacialFeatures] buffer.
+///
+/// Since FaceSDK 9 `FSDK_GetTrackerEyes` fills a full `FSDK_Features` array,
+/// so the buffer is allocated with [FacialFeatureCount] points.
 class Eyes extends Freeable {
-  final _NativePointer<Point> _nativePointer;
+  final _NativePointer<Pointf> _nativePointer;
 
   Eyes(this._nativePointer);
 
   factory Eyes.allocate() {
-    return Eyes(_AutoNativePointer.allocate(sizeOf<Point>() * 2));
+    return Eyes(_AutoNativePointer.allocate(
+        sizeOf<Pointf>() * FacialFeatureCount));
   }
 
   factory Eyes._allocate() {
     return Eyes.allocate();
   }
 
-  factory Eyes.fromPointer(Pointer<Point> pointer) {
-    return Eyes(_NativePointer<Point>(pointer));
+  factory Eyes.fromPointer(Pointer<Pointf> pointer) {
+    return Eyes(_NativePointer<Pointf>(pointer));
   }
 
   factory Eyes.fromAddress(int address) {
-    return Eyes(_NativePointer<Point>.fromAddress(address));
+    return Eyes(_NativePointer<Pointf>.fromAddress(address));
   }
 
-  Pointer<Point> get pointer => _nativePointer.pointer;
+  Pointer<Pointf> get pointer => _nativePointer.pointer;
 
-  Point get left => pointer[0];
-  Point get right => pointer[1];
+  Pointf get left => pointer[0];
+  Pointf get right => pointer[1];
 
-  set left(Point point) => _setPoint(0, point);
-  set right(Point point) => _setPoint(1, point);
+  set left(Pointf point) => _setPoint(0, point);
+  set right(Pointf point) => _setPoint(1, point);
 
-  void _setPoint(int index, Point point) {
+  void _setPoint(int index, Pointf point) {
     final value = pointer[index];
     value.x = point.x;
     value.y = point.y;
@@ -751,7 +762,7 @@ class Eyes extends Freeable {
   }
 }
 
-class FacialFeatures extends ListBase<Point> implements Freeable {
+class FacialFeatures extends ListBase<Pointf> implements Freeable {
   static const LeftEye = 0;
   static const RightEye = 1;
   static const NoseTip = 2;
@@ -823,25 +834,25 @@ class FacialFeatures extends ListBase<Point> implements Freeable {
   static const FaceContour16 = 68;
   static const FaceContour17 = 69;
 
-  _NativePointer<Point> _nativePointer;
+  _NativePointer<Pointf> _nativePointer;
 
   FacialFeatures(this._nativePointer);
 
   factory FacialFeatures.allocate() {
-    return FacialFeatures(_AutoNativePointer<Point>.allocate(
-        sizeOf<Point>() * FacialFeatureCount));
+    return FacialFeatures(_AutoNativePointer<Pointf>.allocate(
+        sizeOf<Pointf>() * FacialFeatureCount));
   }
 
   factory FacialFeatures._allocate() {
     return FacialFeatures.allocate();
   }
 
-  factory FacialFeatures.fromPointer(Pointer<Point> pointer) {
-    return FacialFeatures(_NativePointer<Point>(pointer));
+  factory FacialFeatures.fromPointer(Pointer<Pointf> pointer) {
+    return FacialFeatures(_NativePointer<Pointf>(pointer));
   }
 
   factory FacialFeatures.fromAddress(int address) {
-    return FacialFeatures(_NativePointer<Point>.fromAddress(address));
+    return FacialFeatures(_NativePointer<Pointf>.fromAddress(address));
   }
 
   @override
@@ -852,13 +863,13 @@ class FacialFeatures extends ListBase<Point> implements Freeable {
     throw UnsupportedError('Cannot resize FacialFeatures object');
   }
 
-  Pointer<Point> get pointer => _nativePointer.pointer;
+  Pointer<Pointf> get pointer => _nativePointer.pointer;
 
   @override
-  Point operator [](int index) => pointer[index];
+  Pointf operator [](int index) => pointer[index];
 
   @override
-  void operator []=(int index, Point point) {
+  void operator []=(int index, Pointf point) {
     final value = pointer[index];
     value.x = point.x;
     value.y = point.y;
@@ -1100,11 +1111,11 @@ class Image extends Freeable {
     return LoadImageFromPngBufferWithAlpha(buffer, image: image);
   }
 
-  FacePosition detectFace({FacePosition? facePosition}) {
-    return DetectFace(this, facePosition: facePosition);
+  Face detectFace({Face? face}) {
+    return DetectFace(this, face: face);
   }
 
-  FacePositions detectMultipleFaces({FacePositions? faces, int maxSize = 256}) {
+  Faces detectMultipleFaces({Faces? faces, int maxSize = 256}) {
     return DetectMultipleFaces(this, faces: faces, maxSize: maxSize);
   }
 
@@ -1112,18 +1123,10 @@ class Image extends Freeable {
     return DetectFacialFeatures(this, facialFeatures: facialFeatures);
   }
 
-  FacialFeatures detectFacialFeaturesInRegion(FacePosition facePosition,
+  FacialFeatures detectFacialFeaturesInRegion(Face face,
       {FacialFeatures? facialFeatures}) {
-    return DetectFacialFeaturesInRegion(this, facePosition,
+    return DetectFacialFeaturesInRegion(this, face,
         facialFeatures: facialFeatures);
-  }
-
-  Eyes detectEyes({Eyes? eyes}) {
-    return DetectEyes(this, eyes: eyes);
-  }
-
-  Eyes detectEyesInRegion(FacePosition facePosition, {Eyes? eyes}) {
-    return DetectEyesInRegion(this, facePosition, eyes: eyes);
   }
 
   Image copy() {
@@ -1170,22 +1173,9 @@ class Image extends Freeable {
     return GetFaceTemplate(this, faceTemplate: faceTemplate);
   }
 
-  FaceTemplate getFaceTemplateInRegion(FacePosition facePosition,
+  FaceTemplate getFaceTemplateInRegion(Face face,
       {FaceTemplate? faceTemplate}) {
-    return GetFaceTemplateInRegion(this, facePosition,
-        faceTemplate: faceTemplate);
-  }
-
-  FaceTemplate getFaceTemplateUsingFeatures(FacialFeatures facialFeatures,
-      {FaceTemplate? faceTemplate}) {
-    return GetFaceTemplateUsingFeatures(this, facialFeatures,
-        faceTemplate: faceTemplate);
-  }
-
-  FaceTemplate getFaceTemplateUsingEyes(Eyes eyeCoords,
-      {FaceTemplate? faceTemplate}) {
-    return GetFaceTemplateUsingEyes(this, eyeCoords,
-        faceTemplate: faceTemplate);
+    return GetFaceTemplateInRegion(this, face, faceTemplate: faceTemplate);
   }
 
   String detectFacialAttributeUsingFeatures(
@@ -1193,6 +1183,12 @@ class Image extends Freeable {
       {int maxSizeInBytes = 256}) {
     return DetectFacialAttributeUsingFeatures(
         this, facialFeatures, attributeName,
+        maxSizeInBytes: maxSizeInBytes);
+  }
+
+  String detectFacialAttributeUsingFace(Face face, String attributeName,
+      {int maxSizeInBytes = 256}) {
+    return DetectFacialAttributeUsingFace(this, face, attributeName,
         maxSizeInBytes: maxSizeInBytes);
   }
 }
@@ -1308,10 +1304,8 @@ class Tracker extends Freeable {
         facialFeatures: facialFeatures);
   }
 
-  FacePosition getFacePosition(int cameraIdx, int id,
-      {FacePosition? facePosition}) {
-    return GetTrackerFacePosition(this, cameraIdx, id,
-        facePosition: facePosition);
+  Face getFace(int cameraIdx, int id, {Face? face}) {
+    return GetTrackerFace(this, cameraIdx, id, face: face);
   }
 
   void lockID(int id) {
@@ -1576,16 +1570,22 @@ class _GetNumThreadsWrapper {
 final GetNumThreads = _GetNumThreadsWrapper();
 
 class _InitializeWrapper {
-  late int Function() _func;
+  late int Function(Pointer<Utf8>) _func;
 
   _InitializeWrapper() {
     _func = _nativeLib
-        .lookup<NativeFunction<Int32 Function()>>('FSDK_Initialize')
+        .lookup<NativeFunction<Int32 Function(Pointer<Utf8>)>>(
+            'FSDK_Initialize')
         .asFunction();
   }
 
   void call() {
-    _checkErrorCode(_func(), 'Initialize');
+    final dataFilesPath = ''.toNativeUtf8();
+    try {
+      _checkErrorCode(_func(dataFilesPath), 'Initialize');
+    } finally {
+      malloc.free(dataFilesPath);
+    }
   }
 }
 
@@ -1923,41 +1923,41 @@ final LoadImageFromPngBufferWithAlpha =
     _LoadImageFromPngBufferWithAlphaWrapper();
 
 class _DetectFaceWrapper {
-  late int Function(int, Pointer<_FacePosition>) _func;
+  late int Function(int, Pointer<_Face>) _func;
 
   _DetectFaceWrapper() {
     _func = _nativeLib
-        .lookup<NativeFunction<Int32 Function(Uint32, Pointer<_FacePosition>)>>(
+        .lookup<NativeFunction<Int32 Function(Uint32, Pointer<_Face>)>>(
             'FSDK_DetectFace')
         .asFunction();
   }
 
-  FacePosition call(Image image, {FacePosition? facePosition}) {
-    facePosition ??= FacePosition._allocate();
-    _checkErrorCode(_func(image.handle, facePosition.pointer), 'DetectFace');
-    return facePosition;
+  Face call(Image image, {Face? face}) {
+    face ??= Face._allocate();
+    _checkErrorCode(_func(image.handle, face.pointer), 'DetectFace');
+    return face;
   }
 }
 
 final DetectFace = _DetectFaceWrapper();
 
 class _DetectMultipleFacesWrapper {
-  late int Function(int, Pointer<Int32>, Pointer<_FacePosition>, int) _func;
+  late int Function(int, Pointer<Int32>, Pointer<_Face>, int) _func;
 
   _DetectMultipleFacesWrapper() {
     _func = _nativeLib
         .lookup<
             NativeFunction<
-                Int32 Function(Uint32, Pointer<Int32>, Pointer<_FacePosition>,
+                Int32 Function(Uint32, Pointer<Int32>, Pointer<_Face>,
                     Int32)>>('FSDK_DetectMultipleFaces')
         .asFunction();
   }
 
-  FacePositions call(Image image, {FacePositions? faces, int maxSize = 256}) {
-    faces ??= FacePositions._allocate(maxSize);
+  Faces call(Image image, {Faces? faces, int maxSize = 256}) {
+    faces ??= Faces._allocate(maxSize);
     _checkErrorCode(
         _func(image.handle, faces._lengthPointer, faces.pointer,
-            sizeOf<Int32>() * faces.capacity),
+            faces.capacity),
         'DetectMultipleFaces');
     return faces;
   }
@@ -1965,73 +1965,12 @@ class _DetectMultipleFacesWrapper {
 
 final DetectMultipleFaces = _DetectMultipleFacesWrapper();
 
-class _SetFaceDetectionParametersWrapper {
-  late int Function(int, int, int) _func;
-
-  _SetFaceDetectionParametersWrapper() {
-    _func = _nativeLib
-        .lookup<NativeFunction<Int32 Function(Uint8, Uint8, Int32)>>(
-            'FSDK_SetFaceDetectionParameters')
-        .asFunction();
-  }
-
-  void call(bool handleArbitraryRotations, bool determineFaceRotationAngle,
-      int internalResizeWidth) {
-    _checkErrorCode(
-        _func(handleArbitraryRotations ? 1 : 0,
-            determineFaceRotationAngle ? 1 : 0, internalResizeWidth),
-        'SetFaceDetectionParameters');
-  }
-}
-
-final SetFaceDetectionParameters = _SetFaceDetectionParametersWrapper();
-
-class _SetFaceDetectionThresholdWrapper {
-  late int Function(int) _func;
-
-  _SetFaceDetectionThresholdWrapper() {
-    _func = _nativeLib
-        .lookup<NativeFunction<Int32 Function(Int32)>>(
-            'FSDK_SetFaceDetectionThreshold')
-        .asFunction();
-  }
-
-  void call(int threshold) {
-    _checkErrorCode(_func(threshold), 'SetFaceDetectionThreshold');
-  }
-}
-
-final SetFaceDetectionThreshold = _SetFaceDetectionThresholdWrapper();
-
-class _GetDetectedFaceConfidenceWrapper {
-  late int Function(Pointer<Int32>) _func;
-
-  _GetDetectedFaceConfidenceWrapper() {
-    _func = _nativeLib
-        .lookup<NativeFunction<Int32 Function(Pointer<Int32>)>>(
-            'FSDK_GetDetectedFaceConfidence')
-        .asFunction();
-  }
-
-  int call() {
-    final var1 = malloc.allocate<Int32>(sizeOf<Int32>() * 1);
-    try {
-      _checkErrorCode(_func(var1), 'GetDetectedFaceConfidence');
-      return var1.value;
-    } finally {
-      malloc.free(var1);
-    }
-  }
-}
-
-final GetDetectedFaceConfidence = _GetDetectedFaceConfidenceWrapper();
-
 class _DetectFacialFeaturesWrapper {
-  late int Function(int, Pointer<Point>) _func;
+  late int Function(int, Pointer<Pointf>) _func;
 
   _DetectFacialFeaturesWrapper() {
     _func = _nativeLib
-        .lookup<NativeFunction<Int32 Function(Uint32, Pointer<Point>)>>(
+        .lookup<NativeFunction<Int32 Function(Uint32, Pointer<Pointf>)>>(
             'FSDK_DetectFacialFeatures')
         .asFunction();
   }
@@ -2047,69 +1986,28 @@ class _DetectFacialFeaturesWrapper {
 final DetectFacialFeatures = _DetectFacialFeaturesWrapper();
 
 class _DetectFacialFeaturesInRegionWrapper {
-  late int Function(int, Pointer<_FacePosition>, Pointer<Point>) _func;
+  late int Function(int, Pointer<_Face>, Pointer<Pointf>) _func;
 
   _DetectFacialFeaturesInRegionWrapper() {
     _func = _nativeLib
         .lookup<
             NativeFunction<
-                Int32 Function(Uint32, Pointer<_FacePosition>,
-                    Pointer<Point>)>>('FSDK_DetectFacialFeaturesInRegion')
+                Int32 Function(Uint32, Pointer<_Face>,
+                    Pointer<Pointf>)>>('FSDK_DetectFacialFeaturesInRegion')
         .asFunction();
   }
 
-  FacialFeatures call(Image image, FacePosition facePosition,
+  FacialFeatures call(Image image, Face face,
       {FacialFeatures? facialFeatures}) {
     facialFeatures ??= FacialFeatures._allocate();
     _checkErrorCode(
-        _func(image.handle, facePosition.pointer, facialFeatures.pointer),
+        _func(image.handle, face.pointer, facialFeatures.pointer),
         'DetectFacialFeaturesInRegion');
     return facialFeatures;
   }
 }
 
 final DetectFacialFeaturesInRegion = _DetectFacialFeaturesInRegionWrapper();
-
-class _DetectEyesWrapper {
-  late int Function(int, Pointer<Point>) _func;
-
-  _DetectEyesWrapper() {
-    _func = _nativeLib
-        .lookup<NativeFunction<Int32 Function(Uint32, Pointer<Point>)>>(
-            'FSDK_DetectEyes')
-        .asFunction();
-  }
-
-  Eyes call(Image image, {Eyes? eyes}) {
-    eyes ??= Eyes._allocate();
-    _checkErrorCode(_func(image.handle, eyes.pointer), 'DetectEyes');
-    return eyes;
-  }
-}
-
-final DetectEyes = _DetectEyesWrapper();
-
-class _DetectEyesInRegionWrapper {
-  late int Function(int, Pointer<_FacePosition>, Pointer<Point>) _func;
-
-  _DetectEyesInRegionWrapper() {
-    _func = _nativeLib
-        .lookup<
-            NativeFunction<
-                Int32 Function(Uint32, Pointer<_FacePosition>,
-                    Pointer<Point>)>>('FSDK_DetectEyesInRegion')
-        .asFunction();
-  }
-
-  Eyes call(Image image, FacePosition facePosition, {Eyes? eyes}) {
-    eyes ??= Eyes._allocate();
-    _checkErrorCode(_func(image.handle, facePosition.pointer, eyes.pointer),
-        'DetectEyesInRegion');
-    return eyes;
-  }
-}
-
-final DetectEyesInRegion = _DetectEyesInRegionWrapper();
 
 class _CopyImageWrapper {
   late int Function(int, int) _func;
@@ -2275,14 +2173,14 @@ final MirrorImage = _MirrorImageWrapper();
 
 class _ExtractFaceImageWrapper {
   late int Function(
-      int, Pointer<Point>, int, int, Pointer<Uint32>, Pointer<Point>) _func;
+      int, Pointer<Pointf>, int, int, Pointer<Uint32>, Pointer<Pointf>) _func;
 
   _ExtractFaceImageWrapper() {
     _func = _nativeLib
         .lookup<
             NativeFunction<
-                Int32 Function(Uint32, Pointer<Point>, Int32, Int32,
-                    Pointer<Uint32>, Pointer<Point>)>>('FSDK_ExtractFaceImage')
+                Int32 Function(Uint32, Pointer<Pointf>, Int32, Int32,
+                    Pointer<Uint32>, Pointer<Pointf>)>>('FSDK_ExtractFaceImage')
         .asFunction();
   }
 
@@ -2322,75 +2220,27 @@ class _GetFaceTemplateWrapper {
 final GetFaceTemplate = _GetFaceTemplateWrapper();
 
 class _GetFaceTemplateInRegionWrapper {
-  late int Function(int, Pointer<_FacePosition>, Pointer<Uint8>) _func;
+  late int Function(int, Pointer<_Face>, Pointer<Uint8>) _func;
 
   _GetFaceTemplateInRegionWrapper() {
     _func = _nativeLib
         .lookup<
             NativeFunction<
-                Int32 Function(Uint32, Pointer<_FacePosition>,
+                Int32 Function(Uint32, Pointer<_Face>,
                     Pointer<Uint8>)>>('FSDK_GetFaceTemplateInRegion')
         .asFunction();
   }
 
-  FaceTemplate call(Image image, FacePosition facePosition,
-      {FaceTemplate? faceTemplate}) {
+  FaceTemplate call(Image image, Face face, {FaceTemplate? faceTemplate}) {
     faceTemplate ??= FaceTemplate._allocate();
     _checkErrorCode(
-        _func(image.handle, facePosition.pointer, faceTemplate.pointer),
+        _func(image.handle, face.pointer, faceTemplate.pointer),
         'GetFaceTemplateInRegion');
     return faceTemplate;
   }
 }
 
 final GetFaceTemplateInRegion = _GetFaceTemplateInRegionWrapper();
-
-class _GetFaceTemplateUsingFeaturesWrapper {
-  late int Function(int, Pointer<Point>, Pointer<Uint8>) _func;
-
-  _GetFaceTemplateUsingFeaturesWrapper() {
-    _func = _nativeLib
-        .lookup<
-            NativeFunction<
-                Int32 Function(Uint32, Pointer<Point>,
-                    Pointer<Uint8>)>>('FSDK_GetFaceTemplateUsingFeatures')
-        .asFunction();
-  }
-
-  FaceTemplate call(Image image, FacialFeatures facialFeatures,
-      {FaceTemplate? faceTemplate}) {
-    faceTemplate ??= FaceTemplate._allocate();
-    _checkErrorCode(
-        _func(image.handle, facialFeatures.pointer, faceTemplate.pointer),
-        'GetFaceTemplateUsingFeatures');
-    return faceTemplate;
-  }
-}
-
-final GetFaceTemplateUsingFeatures = _GetFaceTemplateUsingFeaturesWrapper();
-
-class _GetFaceTemplateUsingEyesWrapper {
-  late int Function(int, Pointer<Point>, Pointer<Uint8>) _func;
-
-  _GetFaceTemplateUsingEyesWrapper() {
-    _func = _nativeLib
-        .lookup<
-            NativeFunction<
-                Int32 Function(Uint32, Pointer<Point>,
-                    Pointer<Uint8>)>>('FSDK_GetFaceTemplateUsingEyes')
-        .asFunction();
-  }
-
-  FaceTemplate call(Image image, Eyes eyeCoords, {FaceTemplate? faceTemplate}) {
-    faceTemplate ??= FaceTemplate._allocate();
-    _checkErrorCode(
-        _func(image.handle, eyeCoords.pointer, faceTemplate.pointer),
-        'GetFaceTemplateUsingEyes');
-    return faceTemplate;
-  }
-}
-
-final GetFaceTemplateUsingEyes = _GetFaceTemplateUsingEyesWrapper();
 
 class _MatchFacesWrapper {
   late int Function(Pointer<Uint8>, Pointer<Uint8>, Pointer<Float>) _func;
@@ -2417,52 +2267,6 @@ class _MatchFacesWrapper {
 }
 
 final MatchFaces = _MatchFacesWrapper();
-
-class _GetMatchingThresholdAtFARWrapper {
-  late int Function(double, Pointer<Float>) _func;
-
-  _GetMatchingThresholdAtFARWrapper() {
-    _func = _nativeLib
-        .lookup<NativeFunction<Int32 Function(Float, Pointer<Float>)>>(
-            'FSDK_GetMatchingThresholdAtFAR')
-        .asFunction();
-  }
-
-  double call(double fARValue) {
-    final var1 = malloc.allocate<Float>(sizeOf<Float>() * 1);
-    try {
-      _checkErrorCode(_func(fARValue, var1), 'GetMatchingThresholdAtFAR');
-      return var1.value;
-    } finally {
-      malloc.free(var1);
-    }
-  }
-}
-
-final GetMatchingThresholdAtFAR = _GetMatchingThresholdAtFARWrapper();
-
-class _GetMatchingThresholdAtFRRWrapper {
-  late int Function(double, Pointer<Float>) _func;
-
-  _GetMatchingThresholdAtFRRWrapper() {
-    _func = _nativeLib
-        .lookup<NativeFunction<Int32 Function(Float, Pointer<Float>)>>(
-            'FSDK_GetMatchingThresholdAtFRR')
-        .asFunction();
-  }
-
-  double call(double fRRValue) {
-    final var1 = malloc.allocate<Float>(sizeOf<Float>() * 1);
-    try {
-      _checkErrorCode(_func(fRRValue, var1), 'GetMatchingThresholdAtFRR');
-      return var1.value;
-    } finally {
-      malloc.free(var1);
-    }
-  }
-}
-
-final GetMatchingThresholdAtFRR = _GetMatchingThresholdAtFRRWrapper();
 
 class _CreateTrackerWrapper {
   late int Function(Pointer<Uint32>) _func;
@@ -2579,7 +2383,7 @@ class _GetTrackerParameterWrapper {
         .lookup<
             NativeFunction<
                 Int32 Function(Uint32, Pointer<Utf8>, Pointer<Utf8>,
-                    Int32)>>('FSDK_GetTrackerParameter')
+                    Int64)>>('FSDK_GetTrackerParameter')
         .asFunction();
   }
 
@@ -2626,14 +2430,14 @@ class _FeedFrameWrapper {
 final FeedFrame = _FeedFrameWrapper();
 
 class _GetTrackerEyesWrapper {
-  late int Function(int, int, int, Pointer<Point>) _func;
+  late int Function(int, int, int, Pointer<Pointf>) _func;
 
   _GetTrackerEyesWrapper() {
     _func = _nativeLib
         .lookup<
             NativeFunction<
                 Int32 Function(Uint32, Int64, Int64,
-                    Pointer<Point>)>>('FSDK_GetTrackerEyes')
+                    Pointer<Pointf>)>>('FSDK_GetTrackerEyes')
         .asFunction();
   }
 
@@ -2648,14 +2452,14 @@ class _GetTrackerEyesWrapper {
 final GetTrackerEyes = _GetTrackerEyesWrapper();
 
 class _GetTrackerFacialFeaturesWrapper {
-  late int Function(int, int, int, Pointer<Point>) _func;
+  late int Function(int, int, int, Pointer<Pointf>) _func;
 
   _GetTrackerFacialFeaturesWrapper() {
     _func = _nativeLib
         .lookup<
             NativeFunction<
                 Int32 Function(Uint32, Int64, Int64,
-                    Pointer<Point>)>>('FSDK_GetTrackerFacialFeatures')
+                    Pointer<Pointf>)>>('FSDK_GetTrackerFacialFeatures')
         .asFunction();
   }
 
@@ -2671,28 +2475,27 @@ class _GetTrackerFacialFeaturesWrapper {
 
 final GetTrackerFacialFeatures = _GetTrackerFacialFeaturesWrapper();
 
-class _GetTrackerFacePositionWrapper {
-  late int Function(int, int, int, Pointer<_FacePosition>) _func;
+class _GetTrackerFaceWrapper {
+  late int Function(int, int, int, Pointer<_Face>) _func;
 
-  _GetTrackerFacePositionWrapper() {
+  _GetTrackerFaceWrapper() {
     _func = _nativeLib
         .lookup<
             NativeFunction<
-                Int32 Function(Uint32, Int64, Int64,
-                    Pointer<_FacePosition>)>>('FSDK_GetTrackerFacePosition')
+                Int32 Function(
+                    Uint32, Int64, Int64, Pointer<_Face>)>>('FSDK_GetTrackerFace')
         .asFunction();
   }
 
-  FacePosition call(Tracker tracker, int cameraIdx, int id,
-      {FacePosition? facePosition}) {
-    facePosition ??= FacePosition._allocate();
-    _checkErrorCode(_func(tracker.handle, cameraIdx, id, facePosition.pointer),
-        'GetTrackerFacePosition');
-    return facePosition;
+  Face call(Tracker tracker, int cameraIdx, int id, {Face? face}) {
+    face ??= Face._allocate();
+    _checkErrorCode(
+        _func(tracker.handle, cameraIdx, id, face.pointer), 'GetTrackerFace');
+    return face;
   }
 }
 
-final GetTrackerFacePosition = _GetTrackerFacePositionWrapper();
+final GetTrackerFace = _GetTrackerFaceWrapper();
 
 class _LockIDWrapper {
   late int Function(int, int) _func;
@@ -2958,19 +2761,19 @@ class _GetTrackerMemoryBufferSizeWrapper {
 final GetTrackerMemoryBufferSize = _GetTrackerMemoryBufferSizeWrapper();
 
 class _SaveTrackerMemoryToBufferWrapper {
-  late int Function(int, Pointer<Uint8>) _func;
+  late int Function(int, Pointer<Uint8>, int) _func;
 
   _SaveTrackerMemoryToBufferWrapper() {
     _func = _nativeLib
-        .lookup<NativeFunction<Int32 Function(Uint32, Pointer<Uint8>)>>(
+        .lookup<NativeFunction<Int32 Function(Uint32, Pointer<Uint8>, Int64)>>(
             'FSDK_SaveTrackerMemoryToBuffer')
         .asFunction();
   }
 
   DataBuffer call(Tracker tracker, {DataBuffer? buffer}) {
     buffer ??= DataBuffer._allocate(tracker.bufferSize);
-    _checkErrorCode(
-        _func(tracker.handle, buffer.pointer), 'SaveTrackerMemoryToBuffer');
+    _checkErrorCode(_func(tracker.handle, buffer.pointer, buffer.length),
+        'SaveTrackerMemoryToBuffer');
     return buffer;
   }
 }
@@ -3345,7 +3148,7 @@ class _TrackerMatchFacesWrapper {
 final TrackerMatchFaces = _TrackerMatchFacesWrapper();
 
 class _DetectFacialAttributeUsingFeaturesWrapper {
-  late int Function(int, Pointer<Point>, Pointer<Utf8>, Pointer<Utf8>, int)
+  late int Function(int, Pointer<Pointf>, Pointer<Utf8>, Pointer<Utf8>, int)
       _func;
 
   _DetectFacialAttributeUsingFeaturesWrapper() {
@@ -3354,7 +3157,7 @@ class _DetectFacialAttributeUsingFeaturesWrapper {
             NativeFunction<
                 Int32 Function(
                     Uint32,
-                    Pointer<Point>,
+                    Pointer<Pointf>,
                     Pointer<Utf8>,
                     Pointer<Utf8>,
                     Int64)>>('FSDK_DetectFacialAttributeUsingFeatures')
@@ -3380,6 +3183,41 @@ class _DetectFacialAttributeUsingFeaturesWrapper {
 
 final DetectFacialAttributeUsingFeatures =
     _DetectFacialAttributeUsingFeaturesWrapper();
+
+class _DetectFacialAttributeUsingFaceWrapper {
+  late int Function(int, Pointer<_Face>, Pointer<Utf8>, Pointer<Utf8>, int)
+      _func;
+
+  _DetectFacialAttributeUsingFaceWrapper() {
+    _func = _nativeLib
+        .lookup<
+            NativeFunction<
+                Int32 Function(
+                    Uint32,
+                    Pointer<_Face>,
+                    Pointer<Utf8>,
+                    Pointer<Utf8>,
+                    Int64)>>('FSDK_DetectFacialAttributeUsingFace')
+        .asFunction();
+  }
+
+  String call(Image image, Face face, String attributeName,
+      {int maxSizeInBytes = 256}) {
+    final var1 = attributeName.toNativeUtf8();
+    final var2 = malloc.allocate<Utf8>(maxSizeInBytes);
+    try {
+      _checkErrorCode(
+          _func(image.handle, face.pointer, var1, var2, maxSizeInBytes),
+          'DetectFacialAttributeUsingFace');
+      return var2.toDartString();
+    } finally {
+      malloc.free(var2);
+      malloc.free(var1);
+    }
+  }
+}
+
+final DetectFacialAttributeUsingFace = _DetectFacialAttributeUsingFaceWrapper();
 
 class _GetValueConfidenceWrapper {
   late int Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Float>) _func;

@@ -82,16 +82,16 @@ class FacesPainter extends CustomPainter {
 
     try {
       for (final face in _tracker.faces()) {
-        final position = face.position;
+        final trackedFace = face.face;
 
-        final tl =
-            Offset(position.xc - position.w / 2, position.yc - position.w / 2)
-                .scale(scale, scale)
-                .translate(offsetX, offsetY);
-        final br =
-            Offset(position.xc + position.w / 2, position.yc + position.w / 2)
-                .scale(scale, scale)
-                .translate(offsetX, offsetY);
+        final tl = Offset(
+                trackedFace.p0.x.toDouble(), trackedFace.p0.y.toDouble())
+            .scale(scale, scale)
+            .translate(offsetX, offsetY);
+        final br = Offset(
+                trackedFace.p1.x.toDouble(), trackedFace.p1.y.toDouble())
+            .scale(scale, scale)
+            .translate(offsetX, offsetY);
         FaceRect rect = FaceRect(face.id, tl, br);
 
         _faces.add(rect);
@@ -102,7 +102,7 @@ class FacesPainter extends CustomPainter {
         if (_drawFeatures) {
           for (final point in face.features) {
             canvas.drawCircle(
-                Offset(point.x.toDouble(), point.y.toDouble())
+                Offset(point.x, point.y)
                     .scale(scale, scale)
                     .translate(offsetX, offsetY),
                 2,

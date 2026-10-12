@@ -20,13 +20,13 @@ A new Flutter FFI plugin project.
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'
-  s.platform = :ios, '9.0'
+  s.platform = :ios, '15.0'
 
   # Flutter.framework does not contain a i386 slice.
   s.preserve_paths = 'Frameworks/**/*'
-  s.vendored_frameworks = 'Frameworks/fsdk.framework'
+  s.vendored_frameworks = 'Frameworks/LuxandFaceSDK.xcframework'
   s.pod_target_xcconfig = {     
-    "OTHER_LDFLAGS" => "-framework fsdk",
+    "OTHER_LDFLAGS" => "-framework LuxandFaceSDK",
     'DEFINES_MODULE' => 'YES', 
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386'
   }
